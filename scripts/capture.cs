@@ -399,20 +399,35 @@ namespace ZCodeShot
             catch { }
         }
 
-        // 原生剪贴板：SetClipboardData(CF_BITMAP)，系统会按需为其他格式合成
+        // 原生剪贴板：写入 CF_DIB（Electron/多数应用读取的格式）。BMP 文件去掉 14 字节文件头即为 DIB。
         static void SetClipboardBitmap(Bitmap bmp)
         {
-            IntPtr hbm = bmp.GetHbitmap();
-            if (OpenClipboard(IntPtr.Zero))
+            IntPtr hGlobal = IntPtr.Zero;
+            try
             {
-                try
+                byte[] dib;
+                using (var ms = new MemoryStream())
                 {
-                    EmptyClipboard();
-                    if (SetClipboardData(2 /*CF_BITMAP*/, hbm) == IntPtr.Zero) DeleteObject(hbm); // 成功后归剪贴板所有，不可再删
+                    bmp.Save(ms, ImageFormat.Bmp);
+                    byte[] file = ms.ToArray();
+                    dib = new byte[file.Length - 14];
+                    Array.Copy(file, 14, dib, 0, dib.Length);
                 }
-                finally { CloseClipboard(); }
+                hGlobal = Marshal.AllocHGlobal(dib.Length);
+                Marshal.Copy(dib, 0, hGlobal, dib.Length);
+                if (OpenClipboard(IntPtr.Zero))
+                {
+                    try
+                    {
+                        EmptyClipboard();
+                        if (SetClipboardData(8 /*CF_DIB*/, hGlobal) == IntPtr.Zero) throw new Exception("SetClipboardData failed");
+                        hGlobal = IntPtr.Zero; // 成功后归剪贴板所有
+                    }
+                    finally { CloseClipboard(); }
+                }
             }
-            else DeleteObject(hbm);
+            catch (Exception ex) { Dbg("clipboard: " + ex.Message); }
+            finally { if (hGlobal != IntPtr.Zero) Marshal.FreeHGlobal(hGlobal); }
         }
 
         static bool IsZCodeWindow(IntPtr hwnd)
