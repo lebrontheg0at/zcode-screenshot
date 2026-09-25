@@ -13,7 +13,7 @@ A [ZCode](https://zcode.ai) plugin that adds instant region screenshots to your 
 ### Highlights
 
 - 🖼️ **Region capture with auto-paste** — the screenshot is pasted as an image (not a file path) back into the window you captured from, ready to send
-- ⌨️ **Two global hotkeys** — capture with or without hiding the current window
+- ⌨️ **One global hotkey** — `Ctrl+Alt+A` works anywhere in Windows, even when ZCode is not focused
 - 💬 **`/screenshot` command** — trigger capture from the conversation, change the hotkey, or check listener status
 - 🪶 **Lightweight** — a tiny pure-Win32 listener is compiled on first use, starts lazily, and exits automatically when idle (default 30 min) or when ZCode exits
 - 🛠️ **Zero runtime dependencies** — only Windows + .NET Framework 4 (preinstalled on all modern Windows)
@@ -50,21 +50,20 @@ Then restart ZCode.
 
 ### Usage
 
-**Global hotkeys (work anywhere in Windows, even when ZCode is not focused):**
+**Global hotkey (works anywhere in Windows, even when ZCode is not focused):**
 
 | Hotkey | Behavior |
 |---|---|
-| `Ctrl + Alt + A` | **Hide the current window**, capture, then restore it and auto-paste the image into it (usually the ZCode input box). Ideal when the overlay would otherwise cover what you're capturing from. |
-| `Ctrl + Shift + Alt + A` | Capture **without hiding** the current window, then auto-paste into it. |
+| `Ctrl + Alt + A` | Capture a screen region, then auto-paste the image into the current foreground window (usually the ZCode input box) |
 
-After triggering either hotkey: drag a rectangle over the region → release to capture; press `ESC` to cancel. The captured image is pasted into the previously focused window — add your text and press Enter to send.
+After triggering: drag a rectangle over the region → release to capture; press `ESC` to cancel. The captured image is pasted into the previously focused window — add your text and press Enter to send.
 
 **Slash command in the conversation:**
 
 | Command | Effect |
 |---|---|
-| `/screenshot` | Trigger a region capture (same as the hide-window hotkey) |
-| `/screenshot 热键 Ctrl+Alt+S` | Change the main hotkey (hide-window capture) and hot-reload the listener |
+| `/screenshot` | Trigger a region capture |
+| `/screenshot 热键 Ctrl+Alt+S` | Change the global hotkey and hot-reload the listener |
 | `/screenshot 状态` | Show listener status (running/PID or idle) and current hotkeys |
 
 **Say it in natural language** — the bundled skill lets you just ask: *"take a screenshot"*, *"change the screenshot hotkey to Ctrl+Alt+S"*, *"is the listener running?"*
@@ -75,8 +74,7 @@ Everything lives in `%USERPROFILE%\.zcode\screenshot\config.json` (created on fi
 
 | Key | Default | Meaning |
 |---|---|---|
-| `hotkey` | `Ctrl+Alt+A` | Global hotkey that hides the current window before capturing |
-| `hotkeyNoHide` | `Ctrl+Shift+Alt+A` | Global hotkey that captures without hiding the window |
+| `hotkey` | `Ctrl+Alt+A` | Global capture hotkey |
 | `idleMinutes` | `30` | Listener auto-exits after this many idle minutes |
 | `autoInsert` | `true` | Auto-paste the captured image into the previous foreground window |
 
@@ -125,7 +123,7 @@ zcode-screenshot/
 ### 功能特性
 
 - 🖼️ **框选截图自动粘贴**——截图以图片本体（而非文件路径）粘贴回截图前的窗口，即拍即发
-- ⌨️ **两个全局热键**——可隐藏当前窗口截图，也可不隐藏直接框选
+- ⌨️ **全局热键**——`Ctrl+Alt+A`，系统级，ZCode 不在前台也能用
 - 💬 **`/screenshot` 命令**——对话内触发截图、修改热键、查看监听器状态
 - 🪶 **轻量**——监听器用纯 Win32 消息循环实现（无 WinForms），首次使用时自动编译，懒启动，空闲 30 分钟（可调）或 ZCode 退出后自动退出
 - 🛠️ **零依赖**——只需 Windows + .NET Framework 4（现代 Windows 系统自带）
@@ -166,8 +164,7 @@ git clone https://github.com/lebrontheg0at/zcode-screenshot.git "%USERPROFILE%\.
 
 | 热键 | 行为 |
 |---|---|
-| `Ctrl + Alt + A` | **先隐藏当前窗口** → 框选截图 → 恢复窗口并把图片自动粘贴进去（通常是 ZCode 输入框）。适合避免遮罩挡住要截的画面。 |
-| `Ctrl + Shift + Alt + A` | **不隐藏窗口**直接框选截图，完成后同样自动粘贴。 |
+| `Ctrl + Alt + A` | 框选截图，完成后图片自动粘贴回当前前台窗口（通常是 ZCode 输入框） |
 
 触发后的操作：拖出矩形 → 松手完成截图；按 `ESC` 取消。截图完成后图片自动粘贴回之前的前台窗口，补充文字、回车即可发送。
 
@@ -175,8 +172,8 @@ git clone https://github.com/lebrontheg0at/zcode-screenshot.git "%USERPROFILE%\.
 
 | 命令 | 效果 |
 |---|---|
-| `/screenshot` | 触发框选截图（等同隐藏窗口热键） |
-| `/screenshot 热键 Ctrl+Alt+S` | 修改主热键（隐藏窗口截图那个）并热重载监听器，无需重启 |
+| `/screenshot` | 触发框选截图 |
+| `/screenshot 热键 Ctrl+Alt+S` | 修改全局热键并热重载监听器，无需重启 |
 | `/screenshot 状态` | 查看监听器状态（运行中/PID 或未运行）与当前热键 |
 
 **自然语言也可以**——插件内置了技能，直接说"截个图"、"把截图快捷键改成 Ctrl+Alt+S"、"看下监听器状态"即可。
@@ -187,8 +184,7 @@ git clone https://github.com/lebrontheg0at/zcode-screenshot.git "%USERPROFILE%\.
 
 | 键 | 默认值 | 说明 |
 |---|---|---|
-| `hotkey` | `Ctrl+Alt+A` | 隐藏当前窗口后截图的全局热键 |
-| `hotkeyNoHide` | `Ctrl+Shift+Alt+A` | 不隐藏窗口直接截图的全局热键 |
+| `hotkey` | `Ctrl+Alt+A` | 全局截图热键 |
 | `idleMinutes` | `30` | 监听器空闲多少分钟后自动退出 |
 | `autoInsert` | `true` | 截图完成后自动把图片粘贴回原前台窗口 |
 
@@ -198,7 +194,7 @@ git clone https://github.com/lebrontheg0at/zcode-screenshot.git "%USERPROFILE%\.
 
 ```
 SessionStart 钩子 ──► capture.ps1 启动 ──► 首次运行时编译 capture.exe
-                                        └─► 监听器注册两个全局热键
+                                        └─► 监听器注册全局热键
 热键 / /screenshot ──► 命名事件触发 ──► 全屏遮罩框选
                    ──► PNG 保存到 %USERPROFILE%\.zcode\screenshot\shots\
                    ──► 图片粘贴回之前的前台窗口

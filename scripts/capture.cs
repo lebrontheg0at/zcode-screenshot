@@ -45,7 +45,7 @@ namespace ZCodeShot
         [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
         [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
         [DllImport("gdi32.dll")] static extern int SetROP2(IntPtr dc, int mode);
-        [DllImport("gdi32.dll")] static extern bool GdiRectangle(IntPtr dc, int l, int t, int r, int b);
+        [DllImport("gdi32.dll", EntryPoint = "Rectangle")] static extern bool GdiRectangle(IntPtr dc, int l, int t, int r, int b);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetModuleHandleW(string name);
 
         delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -71,8 +71,7 @@ namespace ZCodeShot
 
         static EventWaitHandle _trigger, _reload;
 
-        const int HotkeyId = 0xB00B;       // 截图并隐藏当前窗口
-        const int HotkeyIdNoHide = 0xB00C; // 截图不隐藏窗口
+        const int HotkeyId = 0xB00B;       // 截图（不隐藏窗口）
         const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8;
         const uint WM_HOTKEY = 0x0312, WM_TIMER = 0x0113, WM_DESTROY = 0x0002, WM_PAINT = 0x000F,
             WM_KEYDOWN = 0x0100, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, WM_MOUSEMOVE = 0x0200;
@@ -86,8 +85,6 @@ namespace ZCodeShot
 
         static uint _mods = MOD_CONTROL | MOD_ALT;
         static uint _vk = (uint)'A';
-        static uint _mods2 = MOD_CONTROL | MOD_ALT | MOD_SHIFT;
-        static uint _vk2 = (uint)'A';
         static DateTime _lastActive = DateTime.Now;
         static bool _capturing = false; // 防重入：遮罩开着时忽略新的热键/触发，避免叠出多层遮罩
         static int _zcodeGoneTicks = 0; // ZCode 进程消失的连续检测次数
@@ -98,9 +95,16 @@ namespace ZCodeShot
         static Point _start, _end;
         static bool _dragging;
 
+        static void Dbg(string s) { try { File.AppendAllText(Path.Combine(BaseDir, "debug.log"), DateTime.Now.ToString("HH:mm:ss.fff") + " " + s + "\r\n"); } catch { } }
+
         static IntPtr MsgProc(IntPtr h, uint m, IntPtr w, IntPtr l)
         {
-            if (m == WM_HOTKEY) { _lastActive = DateTime.Now; DoCapture(w.ToInt32() == HotkeyId); return IntPtr.Zero; }
+            try { return MsgProcInner(h, m, w, l); }
+            catch (Exception ex) { Dbg("MsgProc EXCEPTION: " + ex); return DefWindowProcW(h, m, w, l); }
+        }
+        static IntPtr MsgProcInner(IntPtr h, uint m, IntPtr w, IntPtr l)
+        {
+            if (m == WM_HOTKEY) { Dbg("hotkey id=" + w.ToInt32()); _lastActive = DateTime.Now; DoCapture(); return IntPtr.Zero; }
             if (m == WM_TIMER)
             {
                 try
@@ -108,13 +112,10 @@ namespace ZCodeShot
                     if (_reload.WaitOne(0))
                     {
                         UnregisterHotKey(h, HotkeyId);
-                        UnregisterHotKey(h, HotkeyIdNoHide);
                         LoadConfig();
-                        bool ok1 = RegisterHotKey(h, HotkeyId, _mods, _vk);
-                        bool ok2 = RegisterHotKey(h, HotkeyIdNoHide, _mods2, _vk2);
-                        LogHotkeyFailure(ok1, ok2);
+                        LogHotkeyFailure(RegisterHotKey(h, HotkeyId, _mods, _vk), true);
                     }
-                    if (_trigger.WaitOne(0)) { _lastActive = DateTime.Now; DoCapture(true); } // 脚本触发等同默认热键：隐藏窗口
+                    if (_trigger.WaitOne(0)) { Dbg("trigger"); _lastActive = DateTime.Now; DoCapture(); } // 脚本触发
                     else
                     {
                         // 每 5 秒检查一次：ZCode 进程连续 60 秒不存在则退出（空闲计时照常）
@@ -133,17 +134,17 @@ namespace ZCodeShot
             if (m == WM_DESTROY) return IntPtr.Zero;
             return DefWindowProcW(h, m, w, l);
         }
+        static Point _lastLoggedMove = new Point(int.MinValue, int.MinValue);
         static int _zcodeGoneSeconds = 0;
 
         // 热键注册失败（多半被其他软件占用）不会静默：写日志，capture.ps1 状态 会显示
-        static void LogHotkeyFailure(bool ok1, bool ok2)
+        static void LogHotkeyFailure(bool ok, bool _)
         {
-            if (ok1 && ok2) { try { File.Delete(HotkeyErrorPath); } catch { } return; }
+            if (ok) { try { File.Delete(HotkeyErrorPath); } catch { } return; }
             try
             {
-                string msg = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " 热键注册失败: "
-                    + (ok1 ? "" : "hotkey ") + (ok2 ? "" : "hotkeyNoHide ") + "(可能被其他程序占用)";
-                File.WriteAllText(HotkeyErrorPath, msg);
+                File.WriteAllText(HotkeyErrorPath, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                    + " 热键注册失败（可能被其他程序占用）");
             }
             catch { }
         }
@@ -156,13 +157,17 @@ namespace ZCodeShot
         static void Application_Exit()
         {
             UnregisterHotKey(_msgHwnd, HotkeyId);
-            UnregisterHotKey(_msgHwnd, HotkeyIdNoHide);
             DestroyWindow(_msgHwnd);
             Environment.Exit(0);
         }
 
         // 全屏框选遮罩：拖出矩形后保存，ESC 取消
         static IntPtr OverlayProc(IntPtr h, uint m, IntPtr w, IntPtr l)
+        {
+            try { return OverlayProcInner(h, m, w, l); }
+            catch (Exception ex) { Dbg("OverlayProc EXCEPTION: " + ex); return DefWindowProcW(h, m, w, l); }
+        }
+        static IntPtr OverlayProcInner(IntPtr h, uint m, IntPtr w, IntPtr l)
         {
             switch (m)
             {
@@ -174,6 +179,7 @@ namespace ZCodeShot
                     if (w.ToInt32() == 0x1B) { _result = Rectangle.Empty; DestroyWindow(h); }
                     return IntPtr.Zero;
                 case WM_LBUTTONDOWN:
+                    Dbg("lbtn down");
                     _dragging = true;
                     _start = _end = ToPoint(l);
                     SetCapture(h); // 拖动时保持鼠标消息不丢失
@@ -182,10 +188,12 @@ namespace ZCodeShot
                     if (_dragging)
                     {
                         _end = ToPoint(l);
+                        if (!_lastLoggedMove.Equals(_end)) { Dbg("move " + _end); _lastLoggedMove = _end; }
                         DrawRubber(h, false); // XOR 擦旧画新
                     }
                     return IntPtr.Zero;
                 case WM_LBUTTONUP:
+                    Dbg("lbtn up");
                     if (!_dragging) return IntPtr.Zero;
                     _dragging = false;
                     _end = ToPoint(l);
@@ -275,9 +283,8 @@ namespace ZCodeShot
                     (IntPtr)(-3), IntPtr.Zero, GetModuleHandleW(null), IntPtr.Zero);
                 if (_msgHwnd == IntPtr.Zero) return;
 
-                bool ok1 = RegisterHotKey(_msgHwnd, HotkeyId, _mods, _vk);
-                bool ok2 = RegisterHotKey(_msgHwnd, HotkeyIdNoHide, _mods2, _vk2);
-                LogHotkeyFailure(ok1, ok2);
+                bool ok = RegisterHotKey(_msgHwnd, HotkeyId, _mods, _vk);
+                LogHotkeyFailure(ok, true);
                 SetTimer(_msgHwnd, (UIntPtr)1, 200, IntPtr.Zero);
 
                 MSG msg;
@@ -289,7 +296,7 @@ namespace ZCodeShot
             }
         }
 
-        static void DoCapture(bool hideWindow)
+        static void DoCapture()
         {
             if (_capturing) return; // 已有遮罩在框选，忽略重复触发
             _capturing = true;
@@ -297,18 +304,7 @@ namespace ZCodeShot
             {
                 _lastActive = DateTime.Now;
                 var prevWindow = GetForegroundWindow();
-                if (hideWindow && prevWindow != IntPtr.Zero)
-                {
-                    ShowWindow(prevWindow, SW_HIDE);
-                    WaitInvisible(prevWindow, 500); // 等窗口真正不可见，而非固定 sleep
-                }
                 Bitmap savedBitmap = RunOverlay();
-                if (hideWindow && prevWindow != IntPtr.Zero)
-                {
-                    ShowWindow(prevWindow, SW_SHOW);
-                    SetForegroundWindow(prevWindow);
-                    WaitForeground(prevWindow, 500); // 等前台切换完成再粘贴
-                }
                 if (savedBitmap != null)
                 {
                     PasteToPreviousWindow(prevWindow, savedBitmap);
@@ -330,9 +326,10 @@ namespace ZCodeShot
             var vs = new Rectangle(GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79));
             _overlay = CreateWindowExW(0x80088 /*TOPMOST|TOOLWINDOW|LAYERED*/, "ZCodeShotOverlay", "", 0x80000000 /*WS_POPUP*/,
                 vs.X, vs.Y, vs.Width, vs.Height, IntPtr.Zero, IntPtr.Zero, GetModuleHandleW(null), IntPtr.Zero);
-            if (_overlay == IntPtr.Zero) return null;
+            if (_overlay == IntPtr.Zero) { Dbg("overlay create FAILED"); return null; }
             SetLayeredWindowAttributes(_overlay, 0, 90, 0x2 /*LWA_ALPHA*/);
             ShowWindow(_overlay, SW_SHOW);
+            Dbg("overlay shown");
             MSG msg;
             while (IsWindow(_overlay) && GetMessageW(out msg, IntPtr.Zero, 0, 0))
             {
@@ -340,6 +337,7 @@ namespace ZCodeShot
                 DispatchMessageW(ref msg);
             }
             _overlay = IntPtr.Zero;
+            Dbg("overlay closed, result=" + (_result.IsEmpty ? "empty" : _result.ToString()));
             if (_result.IsEmpty) return null;
             Thread.Sleep(120); // 等桌面合成器完成遮罩消失后的重绘
             try { return SaveRegion(_result); }
@@ -349,11 +347,6 @@ namespace ZCodeShot
         [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
         [DllImport("user32.dll")] static extern IntPtr SetCapture(IntPtr h);
         [DllImport("user32.dll")] static extern bool ReleaseCapture();
-
-        static void WaitInvisible(IntPtr h, int timeoutMs)
-        {
-            for (int waited = 0; IsWindowVisible(h) && waited < timeoutMs; waited += 20) Thread.Sleep(20);
-        }
 
         static void WaitForeground(IntPtr h, int timeoutMs)
         {
@@ -480,14 +473,10 @@ namespace ZCodeShot
                 var m = Regex.Match(json, "\"hotkey\"\\s*:\\s*\"([^\"]+)\"");
                 if (m.Success && ParseHotkey(m.Groups[1].Value, out _mods, out _vk)) { }
                 else ParseHotkey("Ctrl+Alt+A", out _mods, out _vk);
-                var m2 = Regex.Match(json, "\"hotkeyNoHide\"\\s*:\\s*\"([^\"]+)\"");
-                if (m2.Success && ParseHotkey(m2.Groups[1].Value, out _mods2, out _vk2)) { }
-                else ParseHotkey("Ctrl+Shift+Alt+A", out _mods2, out _vk2);
             }
             catch
             {
                 ParseHotkey("Ctrl+Alt+A", out _mods, out _vk);
-                ParseHotkey("Ctrl+Shift+Alt+A", out _mods2, out _vk2);
             }
         }
 

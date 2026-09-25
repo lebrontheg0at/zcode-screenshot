@@ -2,8 +2,7 @@
 # 用法：
 #   capture.ps1                触发框选截图，成功输出图片路径
 #   capture.ps1 启动            预热：确保监听器在运行（SessionStart 钩子调用）
-#   capture.ps1 热键 Ctrl+Alt+S  修改全局热键并热重载
-#   capture.ps1 状态            查看监听器与热键状态
+#   capture.ps1 热键 Ctrl+Alt+S  修改全局热键并热重载#   capture.ps1 状态            查看监听器与热键状态
 $ErrorActionPreference = "Stop"
 
 $base = Join-Path $env:USERPROFILE ".zcode\screenshot"
@@ -11,7 +10,7 @@ $shots = Join-Path $base "shots"
 New-Item -ItemType Directory -Force -Path $shots | Out-Null
 $config = Join-Path $base "config.json"
 if (-not (Test-Path $config)) {
-  @{ hotkey = "Ctrl+Alt+A"; hotkeyNoHide = "Ctrl+Shift+Alt+A"; idleMinutes = 30; autoInsert = $true } | ConvertTo-Json | Set-Content -Encoding UTF8 $config
+  @{ hotkey = "Ctrl+Alt+A"; idleMinutes = 30; autoInsert = $true } | ConvertTo-Json | Set-Content -Encoding UTF8 $config
 }
 
 $cs = Join-Path $PSScriptRoot "capture.cs"
@@ -35,7 +34,7 @@ elseif ($joined -match "^(状态|status)$") { $mode = "status" }
 elseif ($joined -match "^(启动|start)$") { $mode = "start" }
 
 if ($mode -eq "hotkey") {
-  if ($hotkeyText -eq "") { Write-Output "用法：/screenshot 热键 Ctrl+Alt+S（仅修改主热键，Ctrl+Shift+Alt+A 不隐藏截图热键不变）"; exit 0 }
+  if ($hotkeyText -eq "") { Write-Output "用法：/screenshot 热键 Ctrl+Alt+S"; exit 0 }
   $cfg = Get-Content $config -Raw | ConvertFrom-Json
   $cfg.hotkey = $hotkeyText
   $cfg | ConvertTo-Json | Set-Content -Encoding UTF8 $config
@@ -49,8 +48,7 @@ if ($mode -eq "status") {
   $p = Get-Process -Name "capture" -ErrorAction SilentlyContinue
   if ($p) { Write-Output ("监听器：运行中 (PID " + $p.Id + ")") } else { Write-Output "监听器：未运行（截图时自动拉起）" }
   $cfg = Get-Content $config -Raw | ConvertFrom-Json
-  Write-Output ("热键：" + $cfg.hotkey + "（隐藏当前窗口截图）")
-  if ($cfg.PSObject.Properties.Name -contains "hotkeyNoHide") { Write-Output ("热键：" + $cfg.hotkeyNoHide + "（不隐藏窗口截图）") }
+  Write-Output ("热键：" + $cfg.hotkey)
   $hkErr = Join-Path $base "hotkey-error.log"
   if (Test-Path $hkErr) { Write-Output ("警告：" + (Get-Content $hkErr -Raw).Trim() + "（修复后该日志自动清除）") }
   exit 0
@@ -71,7 +69,7 @@ if (-not $running) {
   }
   if (-not $handleReady) { Write-Output "监听器启动失败"; exit 1 }
 }
-if ($mode -eq "start") { Write-Output "截图监听器已就绪（Ctrl+Alt+A 隐藏窗口截图，Ctrl+Shift+Alt+A 不隐藏截图，空闲或 ZCode 退出后自动退出）"; exit 0 }
+if ($mode -eq "start") { Write-Output "截图监听器已就绪（Ctrl+Alt+A 框选截图，空闲或 ZCode 退出后自动退出）"; exit 0 }
 
 # ---- 截图：触发 -> 等待 latest.txt 更新 ----
 $latest = Join-Path $base "latest.txt"
