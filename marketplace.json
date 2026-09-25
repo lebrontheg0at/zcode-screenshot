@@ -1,0 +1,17 @@
+{
+  "name": "zcode-screenshot-market",
+  "plugins": [
+    {
+      "name": "zcode-screenshot",
+      "source": "./",
+      "version": "0.4.2",
+      "description": "Trigger region screenshot via global hotkey or /screenshot command; image is auto-pasted into the ZCode input box.",
+      "displayName": "zcode-screenshot",
+      "displayName_i18n": { "zh-CN": "截图工具" },
+      "description_i18n": {
+        "zh-CN": "全局热键或 /screenshot 命令触发框选截图，图片自动粘贴进 ZCode 对话框，支持自定义热键。"
+      },
+      "category": "productivity"
+    }
+  ]
+}

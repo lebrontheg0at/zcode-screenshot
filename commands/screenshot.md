@@ -3,10 +3,10 @@ description: 框选截图，路径自动填入输入框，补充文字回车后�
 argument-hint: "[热键 Ctrl+Alt+S | 状态]"
 ---
 
-用户请求截图工具操作。脚本固定位于 `C:\Users\Saber\.zcode\local-plugins\zcode-screenshot\scripts\capture.ps1`。用 Bash 运行对应命令（参数 `$ARGUMENTS` 直接追加到脚本名后）：
+用户请求截图工具操作。脚本位于本插件目录下的 `scripts/capture.ps1`（插件根目录可用环境变量 `${CLAUDE_PLUGIN_ROOT}` 表示；若未设置，默认位于 `%USERPROFILE%\.zcode\local-plugins\zcode-screenshot\scripts\capture.ps1`）。用 Bash 运行对应命令（参数 `$ARGUMENTS` 直接追加到脚本名后）：
 
 1. 默认（无参数）：触发框选截图
-   `powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Saber\.zcode\local-plugins\zcode-screenshot\scripts\capture.ps1" $ARGUMENTS`
+   `powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/capture.ps1" $ARGUMENTS`
    - 截图完成后工具会自动把**图片本体**（非文字路径）粘贴回 ZCode 输入框，和拖图进对话框的效果一致。**此时不要主动读图**，只简短回复"截图已填入输入框，补充你想说的话后回车发送"。图片随用户消息直接进来，无需 Read。
    - 输出"截图超时或被取消" → 告知用户框选时按 ESC 可取消，重试即可。
    - 输出"编译失败" → 把完整输出贴给用户排查。

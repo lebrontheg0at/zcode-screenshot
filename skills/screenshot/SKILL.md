@@ -5,7 +5,7 @@ description: 截图工具操作指南：触发框选截图（路径自动填入 
 
 # ZCode 截图工具
 
-- 调度脚本（固定）：`%USERPROFILE%\.zcode\local-plugins\zcode-screenshot\scripts\capture.ps1`
+- 调度脚本：`${CLAUDE_PLUGIN_ROOT}/scripts/capture.ps1`（若该环境变量未设置，默认位于 `%USERPROFILE%\.zcode\local-plugins\zcode-screenshot\scripts\capture.ps1`）
 - 数据目录：`%USERPROFILE%\.zcode\screenshot\`（`config.json` 热键/空闲/autoInsert 配置、`shots\` 截图、`latest.txt` 最近一次截图路径）
 - 监听器 `capture.exe` 由脚本按需编译并懒启动：只在需要时运行，空闲（默认 30 分钟，`config.json` 的 `idleMinutes` 可调）自动退出。
 
@@ -20,7 +20,7 @@ description: 截图工具操作指南：触发框选截图（路径自动填入 
 ## 触发截图
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Saber\.zcode\local-plugins\zcode-screenshot\scripts\capture.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/capture.ps1"
 ```
 
 框选画面为半透明遮罩，拖出矩形松手即完成，按 ESC 取消（取消时不粘贴）。
@@ -28,7 +28,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Saber\.zcode\local
 ## 自定义热键（对话里用户说"把截图快捷键改成 X"时）
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Saber\.zcode\local-plugins\zcode-screenshot\scripts\capture.ps1" 热键 Ctrl+Alt+S
+powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/capture.ps1" 热键 Ctrl+Alt+S
 ```
 
 支持 Ctrl/Alt/Shift/Win 组合 字母/数字/F1~F12。脚本会更新 config.json 并通知运行中的监听器热重载。
@@ -36,7 +36,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Saber\.zcode\local
 ## 查看状态 / 配置
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\Saber\.zcode\local-plugins\zcode-screenshot\scripts\capture.ps1" 状态
+powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/capture.ps1" 状态
 ```
 
 `config.json` 可调项：`hotkey`（热键）、`idleMinutes`（空闲自动退出时间）、`autoInsert`（截图后自动粘贴路径进输入框，改 false 则只落盘不粘贴）。
