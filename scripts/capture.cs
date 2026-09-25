@@ -74,7 +74,7 @@ namespace ZCodeShot
         const int HotkeyId = 0xB00B;       // 截图并隐藏当前窗口
         const int HotkeyIdNoHide = 0xB00C; // 截图不隐藏窗口
         const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8;
-        const uint WM_HOTKEY = 0x0312, WM_TIMER = 0x0113, WM_DESTROY = 0x0002,
+        const uint WM_HOTKEY = 0x0312, WM_TIMER = 0x0113, WM_DESTROY = 0x0002, WM_PAINT = 0x000F,
             WM_KEYDOWN = 0x0100, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, WM_MOUSEMOVE = 0x0200;
         const int SW_HIDE = 0, SW_SHOW = 5;
         const int R2_NOTXORPEN = 10;
@@ -166,28 +166,35 @@ namespace ZCodeShot
         {
             switch (m)
             {
+                case WM_PAINT:
+                    DefWindowProcW(h, m, w, l); // 先让系统擦背景/校验，再补画当前选框
+                    if (_dragging) DrawRubber(h, true);
+                    return IntPtr.Zero;
                 case WM_KEYDOWN:
                     if (w.ToInt32() == 0x1B) { _result = Rectangle.Empty; DestroyWindow(h); }
                     return IntPtr.Zero;
                 case WM_LBUTTONDOWN:
                     _dragging = true;
                     _start = _end = ToPoint(l);
+                    SetCapture(h); // 拖动时保持鼠标消息不丢失
                     return IntPtr.Zero;
                 case WM_MOUSEMOVE:
                     if (_dragging)
                     {
                         _end = ToPoint(l);
-                        DrawRubber(h); // XOR 擦旧画新
+                        DrawRubber(h, false); // XOR 擦旧画新
                     }
                     return IntPtr.Zero;
                 case WM_LBUTTONUP:
                     if (!_dragging) return IntPtr.Zero;
                     _dragging = false;
                     _end = ToPoint(l);
-                    DrawRubber(h); // 擦掉最后一帧
+                    DrawRubber(h, false); // 擦掉最后一帧
+                    ReleaseCapture();
                     _result = Normalize(_start, _end);
                     if (_result.Width < 2 || _result.Height < 2) _result = Rectangle.Empty;
                     ShowWindow(h, SW_HIDE); // 先隐藏遮罩再截屏，避免把遮罩截进去
+                    DestroyWindow(h);       // 必须销毁，否则消息循环永远不返回
                     return IntPtr.Zero;
                 default:
                     return DefWindowProcW(h, m, w, l);
@@ -213,8 +220,8 @@ namespace ZCodeShot
             return new Rectangle(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
         }
 
-        // XOR 橡皮筋：NOTXOR 模式下同矩形画两次等于擦除
-        static void DrawRubber(IntPtr h)
+        // XOR 橡皮筋：NOTXOR 模式下同矩形画两次等于擦除；redrawOnly=true 时只补画不清旧帧
+        static void DrawRubber(IntPtr h, bool redrawOnly)
         {
             var r = Normalize(_start, _end);
             IntPtr dc = GetDC(h);
@@ -223,13 +230,13 @@ namespace ZCodeShot
                 SetROP2(dc, R2_NOTXORPEN);
                 IntPtr pen = CreatePen(0, 2, 0x0000FF00); // lime (0x00BBGGRR)
                 IntPtr old = SelectObject(dc, pen);
-                if (!_lastDrawn.IsEmpty) GdiRectangle(dc, _lastDrawn.Left, _lastDrawn.Top, _lastDrawn.Right, _lastDrawn.Bottom);
+                if (!redrawOnly && !_lastDrawn.IsEmpty) GdiRectangle(dc, _lastDrawn.Left, _lastDrawn.Top, _lastDrawn.Right, _lastDrawn.Bottom);
                 if (!r.IsEmpty && _dragging) GdiRectangle(dc, r.Left, r.Top, r.Right, r.Bottom);
                 SelectObject(dc, old);
                 DeleteObject(pen);
                 ReleaseDC(h, dc);
             }
-            _lastDrawn = _dragging ? r : Rectangle.Empty;
+            _lastDrawn = (_dragging && !redrawOnly) ? r : _lastDrawn;
         }
 
         [STAThread]
@@ -340,6 +347,8 @@ namespace ZCodeShot
         }
 
         [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+        [DllImport("user32.dll")] static extern IntPtr SetCapture(IntPtr h);
+        [DllImport("user32.dll")] static extern bool ReleaseCapture();
 
         static void WaitInvisible(IntPtr h, int timeoutMs)
         {
