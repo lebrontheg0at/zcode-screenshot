@@ -1,7 +1,7 @@
 {
   "name": "zcode-screenshot",
-  "version": "0.4.2",
-  "description": "截图工具：全局热键或 /screenshot 触发框选截图，图片自动粘贴进对话。会话启动预热监听器，空闲自动退出。",
+  "version": "0.4.3",
+  "description": "截图工具：全局热键或 /screenshot 触发框选截图，图片自动粘贴进对话。会话启动预热监听器，空闲或 ZCode 退出后自动退出。",
   "author": { "name": "Saber" },
   "commands": "./commands",
   "skills": "./skills",

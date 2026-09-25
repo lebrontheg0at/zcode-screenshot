@@ -4,7 +4,7 @@
     {
       "name": "zcode-screenshot",
       "source": "./",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "description": "Trigger region screenshot via global hotkey or /screenshot command; image is auto-pasted into the ZCode input box.",
       "displayName": "zcode-screenshot",
       "displayName_i18n": { "zh-CN": "截图工具" },

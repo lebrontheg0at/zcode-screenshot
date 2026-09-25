@@ -1,5 +1,6 @@
 // ZCode 截图监听器：全局热键或命令触发 -> 全屏遮罩框选区域 -> 保存 PNG 到 ~/.zcode/screenshot/shots
-// 懒启动（由 capture.ps1 编译并拉起），空闲自动退出；互斥锁保证单实例
+// 纯 Win32 消息循环（无 WinForms，省内存）；System.Drawing 仅用于 GDI+ 截屏与 PNG 编码。
+// 懒启动（由 capture.ps1 编译并拉起），空闲或 ZCode 进程退出后自动退出；互斥锁保证单实例。
 using System;
 using System.Diagnostics;
 using System.Drawing;
@@ -8,7 +9,6 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Threading;
-using System.Windows.Forms;
 
 namespace ZCodeShot
 {
@@ -20,96 +20,216 @@ namespace ZCodeShot
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
         [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+        [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
         [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
         [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
         [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
+        [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+        [DllImport("user32.dll")] static extern ushort RegisterClassW(ref WNDCLASS wc);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        static extern IntPtr CreateWindowExW(uint exStyle, string cls, string name, uint style,
+            int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr inst, IntPtr param);
+        [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr h);
+        [DllImport("user32.dll")] static extern bool SetLayeredWindowAttributes(IntPtr h, uint crKey, byte alpha, uint flags);
+        [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+        [DllImport("user32.dll")] static extern IntPtr LoadCursor(IntPtr h, uint id);
+        [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+        [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+        [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr owner);
+        [DllImport("user32.dll")] static extern bool EmptyClipboard();
+        [DllImport("user32.dll")] static extern IntPtr SetClipboardData(uint format, IntPtr data);
+        [DllImport("user32.dll")] static extern bool CloseClipboard();
+        [DllImport("gdi32.dll")] static extern IntPtr CreateSolidBrush(uint color);
+        [DllImport("gdi32.dll")] static extern IntPtr CreatePen(int style, int width, uint color);
+        [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
+        [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+        [DllImport("gdi32.dll")] static extern int SetROP2(IntPtr dc, int mode);
+        [DllImport("gdi32.dll")] static extern bool GdiRectangle(IntPtr dc, int l, int t, int r, int b);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetModuleHandleW(string name);
 
+        delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct WNDCLASS
+        {
+            public uint style;
+            public WndProc lpfnWndProc;
+            public int cbClsExtra, cbWndExtra;
+            public IntPtr hInstance, hIcon, hCursor, hbrBackground;
+            public string lpszMenuName, lpszClassName;
+        }
+        struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public int ptX, ptY; }
         struct RECT { public int Left, Top, Right, Bottom; }
-
-        const int HotkeyId = 0xB00B;       // 截图并隐藏当前窗口
-        const int HotkeyIdNoHide = 0xB00C; // 截图不隐藏窗口
-        const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8;
 
         static readonly string BaseDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".zcode", "screenshot");
         static readonly string ConfigPath = Path.Combine(BaseDir, "config.json");
         static readonly string ShotsDir = Path.Combine(BaseDir, "shots");
         static readonly string LatestPath = Path.Combine(BaseDir, "latest.txt");
+        static readonly string HotkeyErrorPath = Path.Combine(BaseDir, "hotkey-error.log");
 
         static EventWaitHandle _trigger, _reload;
-        static MsgForm _form;
+
+        const int HotkeyId = 0xB00B;       // 截图并隐藏当前窗口
+        const int HotkeyIdNoHide = 0xB00C; // 截图不隐藏窗口
+        const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8;
+        const uint WM_HOTKEY = 0x0312, WM_TIMER = 0x0113, WM_DESTROY = 0x0002,
+            WM_KEYDOWN = 0x0100, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, WM_MOUSEMOVE = 0x0200;
+        const int SW_HIDE = 0, SW_SHOW = 5;
+        const int R2_NOTXORPEN = 10;
+
+        static readonly WndProc MsgWndProc = MsgProc;   // 静态引用防止委托被 GC
+        static readonly WndProc OverlayWndProc = OverlayProc;
+        static IntPtr _msgHwnd, _overlay;
+        static IntPtr _overlayBrush;
+
         static uint _mods = MOD_CONTROL | MOD_ALT;
         static uint _vk = (uint)'A';
         static uint _mods2 = MOD_CONTROL | MOD_ALT | MOD_SHIFT;
         static uint _vk2 = (uint)'A';
         static DateTime _lastActive = DateTime.Now;
         static bool _capturing = false; // 防重入：遮罩开着时忽略新的热键/触发，避免叠出多层遮罩
+        static int _zcodeGoneTicks = 0; // ZCode 进程消失的连续检测次数
 
-        // 隐藏消息窗：接收 WM_HOTKEY，WParam 区分是哪个热键
-        class MsgForm : Form
+        // 框选状态
+        static Rectangle _result = Rectangle.Empty;
+        static Rectangle _lastDrawn = Rectangle.Empty;
+        static Point _start, _end;
+        static bool _dragging;
+
+        static IntPtr MsgProc(IntPtr h, uint m, IntPtr w, IntPtr l)
         {
-            public Action<int> OnHotkey;
-            protected override void WndProc(ref Message m)
+            if (m == WM_HOTKEY) { _lastActive = DateTime.Now; DoCapture(w.ToInt32() == HotkeyId); return IntPtr.Zero; }
+            if (m == WM_TIMER)
             {
-                if (m.Msg == 0x0312) { if (OnHotkey != null) OnHotkey(m.WParam.ToInt32()); return; } // WM_HOTKEY
-                base.WndProc(ref m);
+                try
+                {
+                    if (_reload.WaitOne(0))
+                    {
+                        UnregisterHotKey(h, HotkeyId);
+                        UnregisterHotKey(h, HotkeyIdNoHide);
+                        LoadConfig();
+                        bool ok1 = RegisterHotKey(h, HotkeyId, _mods, _vk);
+                        bool ok2 = RegisterHotKey(h, HotkeyIdNoHide, _mods2, _vk2);
+                        LogHotkeyFailure(ok1, ok2);
+                    }
+                    if (_trigger.WaitOne(0)) { _lastActive = DateTime.Now; DoCapture(true); } // 脚本触发等同默认热键：隐藏窗口
+                    else
+                    {
+                        // 每 5 秒检查一次：ZCode 进程连续 60 秒不存在则退出（空闲计时照常）
+                        if (++_zcodeGoneTicks >= 25)
+                        {
+                            _zcodeGoneTicks = 0;
+                            if (!ZCodeRunning()) { _zcodeGoneSeconds++; if (_zcodeGoneSeconds >= 12) { Application_Exit(); } }
+                            else _zcodeGoneSeconds = 0;
+                        }
+                        if ((DateTime.Now - _lastActive).TotalMinutes > IdleMinutes()) Application_Exit();
+                    }
+                }
+                catch { }
+                return IntPtr.Zero;
             }
+            if (m == WM_DESTROY) return IntPtr.Zero;
+            return DefWindowProcW(h, m, w, l);
+        }
+        static int _zcodeGoneSeconds = 0;
+
+        // 热键注册失败（多半被其他软件占用）不会静默：写日志，capture.ps1 状态 会显示
+        static void LogHotkeyFailure(bool ok1, bool ok2)
+        {
+            if (ok1 && ok2) { try { File.Delete(HotkeyErrorPath); } catch { } return; }
+            try
+            {
+                string msg = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " 热键注册失败: "
+                    + (ok1 ? "" : "hotkey ") + (ok2 ? "" : "hotkeyNoHide ") + "(可能被其他程序占用)";
+                File.WriteAllText(HotkeyErrorPath, msg);
+            }
+            catch { }
+        }
+
+        static bool ZCodeRunning()        {
+            try { return Process.GetProcessesByName("zcode").Length > 0 || Process.GetProcessesByName("ZCode").Length > 0; }
+            catch { return true; } // 检测失败时保守处理：不退出
+        }
+
+        static void Application_Exit()
+        {
+            UnregisterHotKey(_msgHwnd, HotkeyId);
+            UnregisterHotKey(_msgHwnd, HotkeyIdNoHide);
+            DestroyWindow(_msgHwnd);
+            Environment.Exit(0);
         }
 
         // 全屏框选遮罩：拖出矩形后保存，ESC 取消
-        class CaptureForm : Form
+        static IntPtr OverlayProc(IntPtr h, uint m, IntPtr w, IntPtr l)
         {
-            public Rectangle Result = Rectangle.Empty;
-            public Bitmap SavedBitmap = null;
-            Point _start, _end;
-            bool _dragging;
-
-            public CaptureForm()
+            switch (m)
             {
-                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint, true);
-                FormBorderStyle = FormBorderStyle.None;
-                StartPosition = FormStartPosition.Manual;
-                var vs = SystemInformation.VirtualScreen;
-                Bounds = new Rectangle(vs.X, vs.Y, vs.Width, vs.Height);
-                ShowInTaskbar = false;
-                TopMost = true;
-                KeyPreview = true;
-                Cursor = Cursors.Cross;
-                BackColor = Color.Black;
-                Opacity = 0.35;
-                KeyDown += (s, e) => { if (e.KeyCode == Keys.Escape) Close(); };
-                MouseDown += (s, e) => { if (e.Button == MouseButtons.Left) { _dragging = true; _start = e.Location; _end = e.Location; } };
-                MouseMove += (s, e) => { if (_dragging) { _end = e.Location; Invalidate(); } };
-                MouseUp += (s, e) =>
-                {
-                    if (!_dragging) return;
+                case WM_KEYDOWN:
+                    if (w.ToInt32() == 0x1B) { _result = Rectangle.Empty; DestroyWindow(h); }
+                    return IntPtr.Zero;
+                case WM_LBUTTONDOWN:
+                    _dragging = true;
+                    _start = _end = ToPoint(l);
+                    return IntPtr.Zero;
+                case WM_MOUSEMOVE:
+                    if (_dragging)
+                    {
+                        _end = ToPoint(l);
+                        DrawRubber(h); // XOR 擦旧画新
+                    }
+                    return IntPtr.Zero;
+                case WM_LBUTTONUP:
+                    if (!_dragging) return IntPtr.Zero;
                     _dragging = false;
-                    Result = Normalize(_start, _end);
-                    if (Result.Width < 2 || Result.Height < 2) { Result = Rectangle.Empty; Close(); return; }
-                    Hide(); // 先隐藏遮罩再截屏，避免把遮罩截进去
-                    Application.DoEvents();
-                    Thread.Sleep(120);
-                    try { SavedBitmap = Program.SaveRegion(Result); } catch { }
-                    Close();
-                };
-                Paint += (s, e) =>
-                {
-                    if (!_dragging) return;
-                    var r = Normalize(_start, _end);
-                    using (var p = new Pen(Color.Lime, 2)) e.Graphics.DrawRectangle(p, r);
-                };
+                    _end = ToPoint(l);
+                    DrawRubber(h); // 擦掉最后一帧
+                    _result = Normalize(_start, _end);
+                    if (_result.Width < 2 || _result.Height < 2) _result = Rectangle.Empty;
+                    ShowWindow(h, SW_HIDE); // 先隐藏遮罩再截屏，避免把遮罩截进去
+                    return IntPtr.Zero;
+                default:
+                    return DefWindowProcW(h, m, w, l);
             }
+        }
+        static IntPtr DefWindowProc = IntPtr.Zero; // 由 Interop 回填
 
-            protected override CreateParams CreateParams
-            {
-                get { var cp = base.CreateParams; cp.ExStyle |= 0x80; return cp; } // WS_EX_TOOLWINDOW：不进 Alt-Tab
-            }
+        [DllImport("user32.dll")] static extern IntPtr DefWindowProcW(IntPtr h, uint m, IntPtr w, IntPtr l);
+        [DllImport("user32.dll")] static extern bool GetMessageW(out MSG msg, IntPtr hwnd, uint min, uint max);
+        [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG msg);
+        [DllImport("user32.dll")] static extern IntPtr DispatchMessageW(ref MSG msg);
+        [DllImport("user32.dll")] static extern IntPtr SetTimer(IntPtr h, UIntPtr id, uint ms, IntPtr proc);
 
-            static Rectangle Normalize(Point a, Point b)
+        static Point ToPoint(IntPtr l)
+        {
+            int x = (short)((long)l & 0xFFFF);
+            int y = (short)(((long)l >> 16) & 0xFFFF);
+            return new Point(x, y);
+        }
+
+        static Rectangle Normalize(Point a, Point b)
+        {
+            return new Rectangle(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
+        }
+
+        // XOR 橡皮筋：NOTXOR 模式下同矩形画两次等于擦除
+        static void DrawRubber(IntPtr h)
+        {
+            var r = Normalize(_start, _end);
+            IntPtr dc = GetDC(h);
+            if (dc != IntPtr.Zero)
             {
-                return new Rectangle(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
+                SetROP2(dc, R2_NOTXORPEN);
+                IntPtr pen = CreatePen(0, 2, 0x0000FF00); // lime (0x00BBGGRR)
+                IntPtr old = SelectObject(dc, pen);
+                if (!_lastDrawn.IsEmpty) GdiRectangle(dc, _lastDrawn.Left, _lastDrawn.Top, _lastDrawn.Right, _lastDrawn.Bottom);
+                if (!r.IsEmpty && _dragging) GdiRectangle(dc, r.Left, r.Top, r.Right, r.Bottom);
+                SelectObject(dc, old);
+                DeleteObject(pen);
+                ReleaseDC(h, dc);
             }
+            _lastDrawn = _dragging ? r : Rectangle.Empty;
         }
 
         [STAThread]
@@ -124,32 +244,41 @@ namespace ZCodeShot
                 _trigger = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\ZCodeShotTrigger");
                 _reload = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\ZCodeShotReload");
                 LoadConfig();
-                Application.EnableVisualStyles();
-                _form = new MsgForm();
-                var handle = _form.Handle; // 强制创建句柄，注册热键用
-                _form.OnHotkey = id => DoCapture(id == HotkeyId); // HotkeyId 隐藏窗口，HotkeyIdNoHide 不隐藏
-                RegisterHotKey(_form.Handle, HotkeyId, _mods, _vk);
-                RegisterHotKey(_form.Handle, HotkeyIdNoHide, _mods2, _vk2);
-                var timer = new System.Windows.Forms.Timer { Interval = 200 };
-                timer.Tick += (s, e) =>
+
+                _overlayBrush = CreateSolidBrush(0x00000000); // 黑
+                var overlayClass = new WNDCLASS
                 {
-                    try
-                    {
-                        if (_reload.WaitOne(0))
-                        {
-                            UnregisterHotKey(_form.Handle, HotkeyId);
-                            UnregisterHotKey(_form.Handle, HotkeyIdNoHide);
-                            LoadConfig();
-                            RegisterHotKey(_form.Handle, HotkeyId, _mods, _vk);
-                            RegisterHotKey(_form.Handle, HotkeyIdNoHide, _mods2, _vk2);
-                        }
-                        if (_trigger.WaitOne(0)) { DoCapture(true); } // 脚本触发等同默认热键：隐藏窗口
-                        else if ((DateTime.Now - _lastActive).TotalMinutes > IdleMinutes()) Application.Exit();
-                    }
-                    catch { }
+                    lpfnWndProc = OverlayWndProc,
+                    hInstance = GetModuleHandleW(null),
+                    lpszClassName = "ZCodeShotOverlay",
+                    hbrBackground = _overlayBrush,
+                    hCursor = LoadCursor(IntPtr.Zero, 32515) // IDC_CROSS
                 };
-                timer.Start();
-                Application.Run(_form);
+                RegisterClassW(ref overlayClass);
+
+                var msgClass = new WNDCLASS
+                {
+                    lpfnWndProc = MsgWndProc,
+                    hInstance = GetModuleHandleW(null),
+                    lpszClassName = "ZCodeShotMsg"
+                };
+                RegisterClassW(ref msgClass);
+                // HWND_MESSAGE：纯消息窗口，不可见、不占任务栏
+                _msgHwnd = CreateWindowExW(0, "ZCodeShotMsg", "ZCodeShot", 0, 0, 0, 0, 0,
+                    (IntPtr)(-3), IntPtr.Zero, GetModuleHandleW(null), IntPtr.Zero);
+                if (_msgHwnd == IntPtr.Zero) return;
+
+                bool ok1 = RegisterHotKey(_msgHwnd, HotkeyId, _mods, _vk);
+                bool ok2 = RegisterHotKey(_msgHwnd, HotkeyIdNoHide, _mods2, _vk2);
+                LogHotkeyFailure(ok1, ok2);
+                SetTimer(_msgHwnd, (UIntPtr)1, 200, IntPtr.Zero);
+
+                MSG msg;
+                while (GetMessageW(out msg, IntPtr.Zero, 0, 0))
+                {
+                    TranslateMessage(ref msg);
+                    DispatchMessageW(ref msg);
+                }
             }
         }
 
@@ -161,19 +290,17 @@ namespace ZCodeShot
             {
                 _lastActive = DateTime.Now;
                 var prevWindow = GetForegroundWindow();
-                if (hideWindow && prevWindow != IntPtr.Zero) ShowWindow(prevWindow, 0); // SW_HIDE
-                Bitmap savedBitmap = null;
-                using (var overlay = new CaptureForm())
-                {
-                    overlay.ShowDialog();
-                    savedBitmap = overlay.SavedBitmap;
-                }
                 if (hideWindow && prevWindow != IntPtr.Zero)
                 {
-                    ShowWindow(prevWindow, 5); // SW_SHOW：恢复刚隐藏的窗口
+                    ShowWindow(prevWindow, SW_HIDE);
+                    WaitInvisible(prevWindow, 500); // 等窗口真正不可见，而非固定 sleep
+                }
+                Bitmap savedBitmap = RunOverlay();
+                if (hideWindow && prevWindow != IntPtr.Zero)
+                {
+                    ShowWindow(prevWindow, SW_SHOW);
                     SetForegroundWindow(prevWindow);
-                    Application.DoEvents();
-                    Thread.Sleep(150);
+                    WaitForeground(prevWindow, 500); // 等前台切换完成再粘贴
                 }
                 if (savedBitmap != null)
                 {
@@ -184,6 +311,47 @@ namespace ZCodeShot
             finally
             {
                 _capturing = false;
+            }
+        }
+
+        // 显示遮罩并跑独立消息循环，返回截图（null = 取消/无效选区）
+        static Bitmap RunOverlay()
+        {
+            _result = Rectangle.Empty;
+            _lastDrawn = Rectangle.Empty;
+            _dragging = false;
+            var vs = new Rectangle(GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79));
+            _overlay = CreateWindowExW(0x80088 /*TOPMOST|TOOLWINDOW|LAYERED*/, "ZCodeShotOverlay", "", 0x80000000 /*WS_POPUP*/,
+                vs.X, vs.Y, vs.Width, vs.Height, IntPtr.Zero, IntPtr.Zero, GetModuleHandleW(null), IntPtr.Zero);
+            if (_overlay == IntPtr.Zero) return null;
+            SetLayeredWindowAttributes(_overlay, 0, 90, 0x2 /*LWA_ALPHA*/);
+            ShowWindow(_overlay, SW_SHOW);
+            MSG msg;
+            while (IsWindow(_overlay) && GetMessageW(out msg, IntPtr.Zero, 0, 0))
+            {
+                TranslateMessage(ref msg);
+                DispatchMessageW(ref msg);
+            }
+            _overlay = IntPtr.Zero;
+            if (_result.IsEmpty) return null;
+            Thread.Sleep(120); // 等桌面合成器完成遮罩消失后的重绘
+            try { return SaveRegion(_result); }
+            catch { return null; }
+        }
+
+        [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+
+        static void WaitInvisible(IntPtr h, int timeoutMs)
+        {
+            for (int waited = 0; IsWindowVisible(h) && waited < timeoutMs; waited += 20) Thread.Sleep(20);
+        }
+
+        static void WaitForeground(IntPtr h, int timeoutMs)
+        {
+            for (int waited = 0; GetForegroundWindow() != h && waited < timeoutMs; waited += 20)
+            {
+                Thread.Sleep(20);
+                SetForegroundWindow(h);
             }
         }
 
@@ -208,9 +376,9 @@ namespace ZCodeShot
             {
                 if (prevHwnd == IntPtr.Zero || bmp == null || !AutoInsert()) return;
                 SetForegroundWindow(prevHwnd);
-                Application.DoEvents();
-                Thread.Sleep(200);
-                // ZCode 客户端：键盘焦点未必在输入框上，先点击输入框区域点亮光标再粘贴
+                WaitForeground(prevHwnd, 500);
+                // ZCode 客户端：键盘焦点未必在输入框上，先点击输入框区域点亮光标再粘贴。
+                // 这是基于窗口底边布局的启发式，若粘贴位置不对，可关闭 autoInsert。
                 if (IsZCodeWindow(prevHwnd))
                 {
                     RECT r;
@@ -220,10 +388,29 @@ namespace ZCodeShot
                         Thread.Sleep(150);
                     }
                 }
-                Clipboard.SetImage(bmp);
-                SendKeys.SendWait("^v");
+                SetClipboardBitmap(bmp);
+                keybd_event(0x11, 0, 0, UIntPtr.Zero);      // Ctrl down
+                keybd_event(0x56, 0, 0, UIntPtr.Zero);      // V down
+                keybd_event(0x56, 0, 2, UIntPtr.Zero);      // V up
+                keybd_event(0x11, 0, 2, UIntPtr.Zero);      // Ctrl up
             }
             catch { }
+        }
+
+        // 原生剪贴板：SetClipboardData(CF_BITMAP)，系统会按需为其他格式合成
+        static void SetClipboardBitmap(Bitmap bmp)
+        {
+            IntPtr hbm = bmp.GetHbitmap();
+            if (OpenClipboard(IntPtr.Zero))
+            {
+                try
+                {
+                    EmptyClipboard();
+                    if (SetClipboardData(2 /*CF_BITMAP*/, hbm) == IntPtr.Zero) DeleteObject(hbm); // 成功后归剪贴板所有，不可再删
+                }
+                finally { CloseClipboard(); }
+            }
+            else DeleteObject(hbm);
         }
 
         static bool IsZCodeWindow(IntPtr hwnd)

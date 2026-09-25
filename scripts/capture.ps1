@@ -22,7 +22,7 @@ if (-not (Test-Path $exe) -or (Get-Item $cs).LastWriteTime -gt (Get-Item $exe).L
   Stop-Process -Name "capture" -Force -ErrorAction SilentlyContinue
   Start-Sleep -Milliseconds 300
   $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-  & $csc /nologo /target:winexe /out:$exe /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.dll $cs
+  & $csc -nologo -target:winexe -out:$exe -r:System.Drawing.dll -r:System.dll $cs
   if ($LASTEXITCODE -ne 0) { Write-Output "编译失败"; exit 1 }
 }
 
@@ -35,7 +35,7 @@ elseif ($joined -match "^(状态|status)$") { $mode = "status" }
 elseif ($joined -match "^(启动|start)$") { $mode = "start" }
 
 if ($mode -eq "hotkey") {
-  if ($hotkeyText -eq "") { Write-Output "用法：/screenshot 热键 Ctrl+Alt+S"; exit 0 }
+  if ($hotkeyText -eq "") { Write-Output "用法：/screenshot 热键 Ctrl+Alt+S（仅修改主热键，Ctrl+Shift+Alt+A 不隐藏截图热键不变）"; exit 0 }
   $cfg = Get-Content $config -Raw | ConvertFrom-Json
   $cfg.hotkey = $hotkeyText
   $cfg | ConvertTo-Json | Set-Content -Encoding UTF8 $config
@@ -51,6 +51,8 @@ if ($mode -eq "status") {
   $cfg = Get-Content $config -Raw | ConvertFrom-Json
   Write-Output ("热键：" + $cfg.hotkey + "（隐藏当前窗口截图）")
   if ($cfg.PSObject.Properties.Name -contains "hotkeyNoHide") { Write-Output ("热键：" + $cfg.hotkeyNoHide + "（不隐藏窗口截图）") }
+  $hkErr = Join-Path $base "hotkey-error.log"
+  if (Test-Path $hkErr) { Write-Output ("警告：" + (Get-Content $hkErr -Raw).Trim() + "（修复后该日志自动清除）") }
   exit 0
 }
 
@@ -58,16 +60,18 @@ if ($mode -eq "status") {
 $running = Get-Process -Name "capture" -ErrorAction SilentlyContinue
 if (-not $running) {
   Start-Process -FilePath $exe -WindowStyle Hidden
-  # 等待监听器创建好事件句柄（比固定 sleep 更快也更可靠）
+  # 等待监听器创建好事件句柄（比固定 sleep 更快也更可靠）；句柄尚未创建时视为未就绪，继续轮询
   $handleReady = $false
   $deadline = (Get-Date).AddSeconds(5)
   while ((Get-Date) -lt $deadline) {
-    if ([System.Threading.EventWaitHandle]::OpenExisting("Local\ZCodeShotTrigger")) { $handleReady = $true; break }
+    try { if ([System.Threading.EventWaitHandle]::OpenExisting("Local\ZCodeShotTrigger")) { $handleReady = $true; break } }
+    catch [System.Threading.WaitHandleCannotBeOpenedException] { }
+    catch { }
     Start-Sleep -Milliseconds 50
   }
   if (-not $handleReady) { Write-Output "监听器启动失败"; exit 1 }
 }
-if ($mode -eq "start") { Write-Output "截图监听器已就绪（Ctrl+Alt+A 隐藏窗口截图，Ctrl+Shift+Alt+A 不隐藏截图，空闲自动退出）"; exit 0 }
+if ($mode -eq "start") { Write-Output "截图监听器已就绪（Ctrl+Alt+A 隐藏窗口截图，Ctrl+Shift+Alt+A 不隐藏截图，空闲或 ZCode 退出后自动退出）"; exit 0 }
 
 # ---- 截图：触发 -> 等待 latest.txt 更新 ----
 $latest = Join-Path $base "latest.txt"

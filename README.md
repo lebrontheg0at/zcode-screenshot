@@ -15,7 +15,7 @@ A [ZCode](https://zcode.ai) plugin that adds instant region screenshots to your 
 - 🖼️ **Region capture with auto-paste** — the screenshot is pasted as an image (not a file path) back into the window you captured from, ready to send
 - ⌨️ **Two global hotkeys** — capture with or without hiding the current window
 - 💬 **`/screenshot` command** — trigger capture from the conversation, change the hotkey, or check listener status
-- 🪶 **Lightweight** — a tiny WinForms listener is compiled on first use, starts lazily, and exits automatically after idle (default 30 min)
+- 🪶 **Lightweight** — a tiny pure-Win32 listener is compiled on first use, starts lazily, and exits automatically when idle (default 30 min) or when ZCode exits
 - 🛠️ **Zero runtime dependencies** — only Windows + .NET Framework 4 (preinstalled on all modern Windows)
 
 ### Requirements
@@ -64,7 +64,7 @@ After triggering either hotkey: drag a rectangle over the region → release to 
 | Command | Effect |
 |---|---|
 | `/screenshot` | Trigger a region capture (same as the hide-window hotkey) |
-| `/screenshot 热键 Ctrl+Alt+S` | Change the hotkeys and hot-reload the listener (applies to both hotkeys' modifier style) |
+| `/screenshot 热键 Ctrl+Alt+S` | Change the main hotkey (hide-window capture) and hot-reload the listener |
 | `/screenshot 状态` | Show listener status (running/PID or idle) and current hotkeys |
 
 **Say it in natural language** — the bundled skill lets you just ask: *"take a screenshot"*, *"change the screenshot hotkey to Ctrl+Alt+S"*, *"is the listener running?"*
@@ -91,6 +91,7 @@ Hotkey / /screenshot ──► named-event trigger ──► fullscreen overlay,
                       ──► PNG saved to %USERPROFILE%\.zcode\screenshot\shots\
                       ──► image pasted back into the previously focused window
 Idle for idleMinutes ──► listener exits (relaunched automatically on next use)
+ZCode process gone for 60 s ──► listener exits
 ```
 
 Single-instance is enforced by a mutex; a re-entry guard prevents stacked overlays; the overlay hides itself before the actual screen grab so it never appears in the picture.
@@ -105,7 +106,7 @@ zcode-screenshot/
 ├── skills/screenshot/          # skill so agents can operate the tool
 ├── hooks/hooks.json            # SessionStart preheat
 ├── scripts/capture.ps1         # dispatcher: compile / start / trigger / hotkey / status
-├── scripts/capture.cs          # WinForms listener source (compiled on demand)
+├── scripts/capture.cs          # listener source, pure Win32 + GDI+ (compiled on demand)
 └── INSTALL-FOR-AI.md           # install guide written for AI agents
 ```
 
@@ -126,7 +127,7 @@ zcode-screenshot/
 - 🖼️ **框选截图自动粘贴**——截图以图片本体（而非文件路径）粘贴回截图前的窗口，即拍即发
 - ⌨️ **两个全局热键**——可隐藏当前窗口截图，也可不隐藏直接框选
 - 💬 **`/screenshot` 命令**——对话内触发截图、修改热键、查看监听器状态
-- 🪶 **轻量**——WinForms 监听器首次使用时自动编译，懒启动，空闲 30 分钟（可调）自动退出
+- 🪶 **轻量**——监听器用纯 Win32 消息循环实现（无 WinForms），首次使用时自动编译，懒启动，空闲 30 分钟（可调）或 ZCode 退出后自动退出
 - 🛠️ **零依赖**——只需 Windows + .NET Framework 4（现代 Windows 系统自带）
 
 ### 环境要求
@@ -175,7 +176,7 @@ git clone https://github.com/lebrontheg0at/zcode-screenshot.git "%USERPROFILE%\.
 | 命令 | 效果 |
 |---|---|
 | `/screenshot` | 触发框选截图（等同隐藏窗口热键） |
-| `/screenshot 热键 Ctrl+Alt+S` | 修改热键并热重载监听器（无需重启） |
+| `/screenshot 热键 Ctrl+Alt+S` | 修改主热键（隐藏窗口截图那个）并热重载监听器，无需重启 |
 | `/screenshot 状态` | 查看监听器状态（运行中/PID 或未运行）与当前热键 |
 
 **自然语言也可以**——插件内置了技能，直接说"截个图"、"把截图快捷键改成 Ctrl+Alt+S"、"看下监听器状态"即可。
@@ -202,6 +203,7 @@ SessionStart 钩子 ──► capture.ps1 启动 ──► 首次运行时编译
                    ──► PNG 保存到 %USERPROFILE%\.zcode\screenshot\shots\
                    ──► 图片粘贴回之前的前台窗口
 空闲超过 idleMinutes ──► 监听器自动退出（下次使用自动拉起）
+ZCode 进程连续 60 秒不存在 ──► 监听器自动退出
 ```
 
 互斥锁保证单实例；防重入保护避免叠加多层遮罩；真正截屏前遮罩会先隐藏自己，因此截图里永远不会出现遮罩。
@@ -216,7 +218,7 @@ zcode-screenshot/
 ├── skills/screenshot/          # 技能，供 Agent 操作截图工具
 ├── hooks/hooks.json            # SessionStart 预热
 ├── scripts/capture.ps1         # 调度脚本：编译/启动/触发/热键/状态
-├── scripts/capture.cs          # WinForms 监听器源码（按需编译）
+├── scripts/capture.cs          # 监听器源码，纯 Win32 + GDI+（按需编译）
 └── INSTALL-FOR-AI.md           # 面向 AI Agent 的安装指南
 ```
 
