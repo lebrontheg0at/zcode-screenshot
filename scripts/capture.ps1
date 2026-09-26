@@ -2,7 +2,9 @@
 # 用法：
 #   capture.ps1                触发框选截图，成功输出图片路径
 #   capture.ps1 启动            预热：确保监听器在运行（SessionStart 钩子调用）
-#   capture.ps1 热键 Ctrl+Alt+S  修改全局热键并热重载#   capture.ps1 状态            查看监听器与热键状态
+#   capture.ps1 热键 Ctrl+Alt+S  修改全局热键并热重载
+#   capture.ps1 状态            查看监听器与热键状态
+#   capture.ps1 校准            记录输入框粘贴位置（先把光标点进 ZCode 输入框再运行）
 $ErrorActionPreference = "Stop"
 
 $base = Join-Path $env:USERPROFILE ".zcode\screenshot"
@@ -32,6 +34,45 @@ $joined = if ($args) { ($args -join " ").Trim() } else { "" }
 if ($joined -match "^(热键|hotkey)\s*(.*)$") { $mode = "hotkey"; $hotkeyText = $Matches[2].Trim() }
 elseif ($joined -match "^(状态|status)$") { $mode = "status" }
 elseif ($joined -match "^(启动|start)$") { $mode = "start" }
+elseif ($joined -match "^(校准|calibrate)$") { $mode = "calibrate" }
+
+if ($mode -eq "calibrate") {
+  Add-Type -TypeDefinition @"
+using System;using System.Runtime.InteropServices;
+public struct PRECT{public int L,T,R,B;}
+public struct PGUITHREADINFO{public int cbSize;public uint flags;public IntPtr hActive,hFocus,hCapture,hMenu,hCaret;public PRECT rcCaret;}
+public class PCal{
+  [DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")]public static extern bool GetGUIThreadInfo(uint id,ref PGUITHREADINFO g);
+  [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
+  [DllImport("user32.dll")]public static extern bool GetWindowRect(IntPtr h,out PRECT r);
+}
+"@
+  $fg = [PCal]::GetForegroundWindow()
+  if ($fg -eq [IntPtr]::Zero) { Write-Output "校准失败：找不到前台窗口"; exit 1 }
+  $winPid = 0
+  [PCal]::GetWindowThreadProcessId($fg, [ref]$winPid) | Out-Null
+  $proc = Get-Process -Id $winPid -ErrorAction SilentlyContinue
+  if (-not $proc -or $proc.ProcessName -notmatch "zcode") { Write-Output "校准失败：请先把 ZCode 设为前台窗口，并点击输入框让光标在输入框里闪烁，再运行校准"; exit 1 }
+  $ti = New-Object PGUITHREADINFO
+  $ti.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf($ti)
+  [PCal]::GetGUIThreadInfo($winPid, [ref]$ti) | Out-Null
+  if ($ti.hFocus -eq [IntPtr]::Zero) { Write-Output "校准失败：没检测到键盘焦点，请点击 ZCode 输入框后重试"; exit 1 }
+  $fr = New-Object PRECT
+  [PCal]::GetWindowRect($ti.hFocus, [ref]$fr) | Out-Null
+  $wr = New-Object PRECT
+  [PCal]::GetWindowRect($fg, [ref]$wr) | Out-Null
+  $fx = [math]::Round((($fr.L + $fr.R) / 2.0 - $wr.L) / ($wr.R - $wr.L), 4)
+  $fy = [math]::Round($wr.B - ($fr.T + $fr.B) / 2.0, 0)
+  $cfg = Get-Content $config -Raw | ConvertFrom-Json
+  $cfg | Add-Member -NotePropertyName pasteClickX -NotePropertyValue $fx -Force
+  $cfg | Add-Member -NotePropertyName pasteClickYFromBottom -NotePropertyValue $fy -Force
+  $cfg | ConvertTo-Json | Set-Content -Encoding UTF8 $config
+  # 通知监听器热重载（剪贴板/点击参数每次粘贴时现读，其实无需重载；保险起见）
+  try { [System.Threading.EventWaitHandle]::OpenExisting("Local\ZCodeShotReload").Set() | Out-Null } catch {}
+  Write-Output ("校准完成：粘贴点击位置已记录（横向 " + ($fx * 100) + "%，距底部 " + $fy + "px）。以后截图会自动点进输入框粘贴。")
+  exit 0
+}
 
 if ($mode -eq "hotkey") {
   if ($hotkeyText -eq "") { Write-Output "用法：/screenshot 热键 Ctrl+Alt+S"; exit 0 }

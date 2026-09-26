@@ -33,6 +33,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scrip
 
 支持 Ctrl/Alt/Shift/Win 组合 字母/数字/F1~F12。脚本会更新 config.json 并通知运行中的监听器热重载。
 
+## 校准粘贴位置（用户反馈"截图没进输入框"时）
+
+让用户先把光标点进 ZCode 输入框，然后运行：
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/capture.ps1" 校准
+```
+
+校准记录输入框相对窗口的点击位置（写入 config.json 的 `pasteClickX`/`pasteClickYFromBottom`），之后截图会自动点进输入框再粘贴，不再依赖键盘焦点。
+
 ## 查看状态 / 配置
 
 ```bash

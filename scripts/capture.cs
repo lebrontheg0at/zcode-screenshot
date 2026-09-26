@@ -236,7 +236,7 @@ namespace ZCodeShot
             if (dc != IntPtr.Zero)
             {
                 SetROP2(dc, R2_NOTXORPEN);
-                IntPtr pen = CreatePen(0, 2, 0x0000FF00); // lime (0x00BBGGRR)
+                IntPtr pen = CreatePen(0, 3, 0x0000FF00); // 绿色选框，3px
                 IntPtr old = SelectObject(dc, pen);
                 if (!redrawOnly && !_lastDrawn.IsEmpty) GdiRectangle(dc, _lastDrawn.Left, _lastDrawn.Top, _lastDrawn.Right, _lastDrawn.Bottom);
                 if (!r.IsEmpty && _dragging) GdiRectangle(dc, r.Left, r.Top, r.Right, r.Bottom);
@@ -381,22 +381,32 @@ namespace ZCodeShot
                 WaitForeground(prevHwnd, 500);
                 // ZCode 客户端：键盘焦点未必在输入框上，先点击输入框区域点亮光标再粘贴。
                 // 这是基于窗口底边布局的启发式，若粘贴位置不对，可关闭 autoInsert。
-                if (IsZCodeWindow(prevHwnd))
+                bool isZCode = IsZCodeWindow(prevHwnd);
+                RECT r;
+                bool hasRect = GetWindowRect(prevHwnd, out r);
+                // 粘贴位置：优先用 /screenshot 校准 记录的 pasteClickX（窗口宽度比例），
+                // 未校准则不点击，直接粘贴到当前键盘焦点（光标在输入框时即可）。
+                double fx = MatchNumber("pasteClickX", -1);
+                double yFromBottom = MatchNumber("pasteClickYFromBottom", 70);
+                Dbg("paste: zcode=" + isZCode + " pasteClickX=" + fx);
+                if (isZCode && hasRect && fx >= 0 && fx <= 1)
                 {
-                    RECT r;
-                    if (GetWindowRect(prevHwnd, out r))
-                    {
-                        LeftClick((r.Left + r.Right) / 2, r.Bottom - 70);
-                        Thread.Sleep(150);
-                    }
+                    int cx = (int)(r.Left + (r.Right - r.Left) * fx);
+                    int cy = r.Bottom - (int)yFromBottom;
+                    Dbg("paste: click " + cx + "," + cy);
+                    LeftClick(cx, cy);
+                    Thread.Sleep(150);
                 }
                 SetClipboardBitmap(bmp);
                 keybd_event(0x11, 0, 0, UIntPtr.Zero);      // Ctrl down
+                Thread.Sleep(30);
                 keybd_event(0x56, 0, 0, UIntPtr.Zero);      // V down
                 keybd_event(0x56, 0, 2, UIntPtr.Zero);      // V up
+                Thread.Sleep(30);
                 keybd_event(0x11, 0, 2, UIntPtr.Zero);      // Ctrl up
+                Dbg("paste: Ctrl+V sent");
             }
-            catch { }
+            catch (Exception ex) { Dbg("paste EXCEPTION: " + ex.Message); }
         }
 
         // 原生剪贴板：写入 CF_DIB（Electron/多数应用读取的格式）。BMP 文件去掉 14 字节文件头即为 DIB。
