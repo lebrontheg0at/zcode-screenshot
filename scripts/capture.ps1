@@ -12,7 +12,7 @@ $shots = Join-Path $base "shots"
 New-Item -ItemType Directory -Force -Path $shots | Out-Null
 $config = Join-Path $base "config.json"
 if (-not (Test-Path $config)) {
-  @{ hotkey = "Ctrl+Alt+A"; idleMinutes = 30; autoInsert = $true } | ConvertTo-Json | Set-Content -Encoding UTF8 $config
+  @{ hotkey = "Ctrl+Alt+A"; idleMinutes = 0; autoInsert = $true } | ConvertTo-Json | Set-Content -Encoding UTF8 $config
 }
 
 $cs = Join-Path $PSScriptRoot "capture.cs"

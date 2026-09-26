@@ -118,14 +118,15 @@ namespace ZCodeShot
                     if (_trigger.WaitOne(0)) { Dbg("trigger"); _lastActive = DateTime.Now; DoCapture(); } // 脚本触发
                     else
                     {
-                        // 每 5 秒检查一次：ZCode 进程连续 60 秒不存在则退出（空闲计时照常）
+                        // 每 5 秒检查一次：ZCode 进程连续 60 秒不存在则退出；idleMinutes>0 时空闲超时也退出
                         if (++_zcodeGoneTicks >= 25)
                         {
                             _zcodeGoneTicks = 0;
                             if (!ZCodeRunning()) { _zcodeGoneSeconds++; if (_zcodeGoneSeconds >= 12) { Application_Exit(); } }
                             else _zcodeGoneSeconds = 0;
                         }
-                        if ((DateTime.Now - _lastActive).TotalMinutes > IdleMinutes()) Application_Exit();
+                        var idle = IdleMinutes();
+                        if (idle > 0 && (DateTime.Now - _lastActive).TotalMinutes > idle) Application_Exit();
                     }
                 }
                 catch { }
@@ -523,8 +524,8 @@ namespace ZCodeShot
 
         static double IdleMinutes()
         {
-            var m = MatchNumber("idleMinutes", 30);
-            return m > 0 ? m : 30;
+            // 默认 0 = 不启用空闲退出（ZCode 运行期间监听器常驻，热键始终可用）
+            return MatchNumber("idleMinutes", 0);
         }
 
         static double MatchNumber(string key, double def)
