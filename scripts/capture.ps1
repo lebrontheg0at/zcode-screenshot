@@ -40,37 +40,34 @@ if ($mode -eq "calibrate") {
   Add-Type -TypeDefinition @"
 using System;using System.Runtime.InteropServices;
 public struct PRECT{public int L,T,R,B;}
-public struct PGUITHREADINFO{public int cbSize;public uint flags;public IntPtr hActive,hFocus,hCapture,hMenu,hCaret;public PRECT rcCaret;}
+public struct PPOINT{public int X,Y;}
 public class PCal{
   [DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")]public static extern bool GetGUIThreadInfo(uint id,ref PGUITHREADINFO g);
-  [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
+  [DllImport("user32.dll")]public static extern bool GetCursorPos(out PPOINT p);
   [DllImport("user32.dll")]public static extern bool GetWindowRect(IntPtr h,out PRECT r);
 }
 "@
   $fg = [PCal]::GetForegroundWindow()
   if ($fg -eq [IntPtr]::Zero) { Write-Output "校准失败：找不到前台窗口"; exit 1 }
+  $wr = New-Object PRECT
+  [PCal]::GetWindowRect($fg, [ref]$wr) | Out-Null
   $winPid = 0
   [PCal]::GetWindowThreadProcessId($fg, [ref]$winPid) | Out-Null
   $proc = Get-Process -Id $winPid -ErrorAction SilentlyContinue
-  if (-not $proc -or $proc.ProcessName -notmatch "zcode") { Write-Output "校准失败：请先把 ZCode 设为前台窗口，并点击输入框让光标在输入框里闪烁，再运行校准"; exit 1 }
-  $ti = New-Object PGUITHREADINFO
-  $ti.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf($ti)
-  [PCal]::GetGUIThreadInfo($winPid, [ref]$ti) | Out-Null
-  if ($ti.hFocus -eq [IntPtr]::Zero) { Write-Output "校准失败：没检测到键盘焦点，请点击 ZCode 输入框后重试"; exit 1 }
-  $fr = New-Object PRECT
-  [PCal]::GetWindowRect($ti.hFocus, [ref]$fr) | Out-Null
-  $wr = New-Object PRECT
-  [PCal]::GetWindowRect($fg, [ref]$wr) | Out-Null
-  $fx = [math]::Round((($fr.L + $fr.R) / 2.0 - $wr.L) / ($wr.R - $wr.L), 4)
-  $fy = [math]::Round($wr.B - ($fr.T + $fr.B) / 2.0, 0)
+  if (-not $proc -or $proc.ProcessName -notmatch "zcode") { Write-Output "校准失败：请先把 ZCode 设为前台窗口"; exit 1 }
+  $pt = New-Object PPOINT
+  [PCal]::GetCursorPos([ref]$pt) | Out-Null
+  if ($pt.X -lt $wr.L -or $pt.X -gt $wr.R -or $pt.Y -lt $wr.T -or $pt.Y -gt $wr.B) {
+    Write-Output "校准失败：鼠标不在 ZCode 窗口内。请先用鼠标点一下输入框，保持鼠标不动，再运行校准"
+    exit 1
+  }
+  $fx = [math]::Round(($pt.X - $wr.L) / ($wr.R - $wr.L), 4)
+  $fy = [math]::Round($wr.B - $pt.Y, 0)
   $cfg = Get-Content $config -Raw | ConvertFrom-Json
   $cfg | Add-Member -NotePropertyName pasteClickX -NotePropertyValue $fx -Force
   $cfg | Add-Member -NotePropertyName pasteClickYFromBottom -NotePropertyValue $fy -Force
   $cfg | ConvertTo-Json | Set-Content -Encoding UTF8 $config
-  # 通知监听器热重载（剪贴板/点击参数每次粘贴时现读，其实无需重载；保险起见）
-  try { [System.Threading.EventWaitHandle]::OpenExisting("Local\ZCodeShotReload").Set() | Out-Null } catch {}
-  Write-Output ("校准完成：粘贴点击位置已记录（横向 " + ($fx * 100) + "%，距底部 " + $fy + "px）。以后截图会自动点进输入框粘贴。")
+  Write-Output ("校准完成：粘贴点击位置已记录（横向 " + ($fx * 100) + "%，距窗口底部 " + $fy + "px）。以后截图会自动点进输入框粘贴。")
   exit 0
 }
 

@@ -35,13 +35,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scrip
 
 ## 校准粘贴位置（用户反馈"截图没进输入框"时）
 
-让用户先把光标点进 ZCode 输入框，然后运行：
+让用户先用鼠标点一下 ZCode 输入框（鼠标保持不动、ZCode 保持前台），然后运行：
 
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/capture.ps1" 校准
 ```
 
-校准记录输入框相对窗口的点击位置（写入 config.json 的 `pasteClickX`/`pasteClickYFromBottom`），之后截图会自动点进输入框再粘贴，不再依赖键盘焦点。
+校准记录鼠标所指位置相对窗口的比例（写入 config.json 的 `pasteClickX`/`pasteClickYFromBottom`），之后截图会自动点进输入框再粘贴，不再依赖键盘焦点。
 
 ## 查看状态 / 配置
 
