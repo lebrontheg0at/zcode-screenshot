@@ -45,6 +45,7 @@ public class PCal{
   [DllImport("user32.dll")]public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")]public static extern bool GetCursorPos(out PPOINT p);
   [DllImport("user32.dll")]public static extern bool GetWindowRect(IntPtr h,out PRECT r);
+  [DllImport("user32.dll")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint pid);
 }
 "@
   $fg = [PCal]::GetForegroundWindow()
