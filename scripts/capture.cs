@@ -41,11 +41,10 @@ namespace ZCodeShot
         [DllImport("user32.dll")] static extern IntPtr SetClipboardData(uint format, IntPtr data);
         [DllImport("user32.dll")] static extern bool CloseClipboard();
         [DllImport("gdi32.dll")] static extern IntPtr CreateSolidBrush(uint color);
-        [DllImport("gdi32.dll")] static extern IntPtr CreatePen(int style, int width, uint color);
+        [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
         [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr obj);
         [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
-        [DllImport("gdi32.dll")] static extern int SetROP2(IntPtr dc, int mode);
-        [DllImport("gdi32.dll", EntryPoint = "Rectangle")] static extern bool GdiRectangle(IntPtr dc, int l, int t, int r, int b);
+        [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetModuleHandleW(string name);
 
         delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
@@ -73,15 +72,13 @@ namespace ZCodeShot
 
         const int HotkeyId = 0xB00B;       // 截图（不隐藏窗口）
         const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8;
-        const uint WM_HOTKEY = 0x0312, WM_TIMER = 0x0113, WM_DESTROY = 0x0002, WM_PAINT = 0x000F,
+        const uint WM_HOTKEY = 0x0312, WM_TIMER = 0x0113, WM_DESTROY = 0x0002,
             WM_KEYDOWN = 0x0100, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, WM_MOUSEMOVE = 0x0200;
         const int SW_HIDE = 0, SW_SHOW = 5;
-        const int R2_NOTXORPEN = 10;
 
         static readonly WndProc MsgWndProc = MsgProc;   // 静态引用防止委托被 GC
         static readonly WndProc OverlayWndProc = OverlayProc;
         static IntPtr _msgHwnd, _overlay;
-        static IntPtr _overlayBrush;
 
         static uint _mods = MOD_CONTROL | MOD_ALT;
         static uint _vk = (uint)'A';
@@ -91,9 +88,11 @@ namespace ZCodeShot
 
         // 框选状态
         static Rectangle _result = Rectangle.Empty;
-        static Rectangle _lastDrawn = Rectangle.Empty;
         static Point _start, _end;
         static bool _dragging;
+        static Rectangle _vs;              // 虚拟屏幕范围
+        static Bitmap _layerBuf;           // 遮罩 ARGB 缓冲：半透明黑 + 不透明绿色选框
+        static Graphics _layerGfx;
 
         static void Dbg(string s) { try { File.AppendAllText(Path.Combine(BaseDir, "debug.log"), DateTime.Now.ToString("HH:mm:ss.fff") + " " + s + "\r\n"); } catch { } }
 
@@ -171,10 +170,6 @@ namespace ZCodeShot
         {
             switch (m)
             {
-                case WM_PAINT:
-                    DefWindowProcW(h, m, w, l); // 先让系统擦背景/校验，再补画当前选框
-                    if (_dragging) DrawRubber(h, true);
-                    return IntPtr.Zero;
                 case WM_KEYDOWN:
                     if (w.ToInt32() == 0x1B) { _result = Rectangle.Empty; DestroyWindow(h); }
                     return IntPtr.Zero;
@@ -189,7 +184,7 @@ namespace ZCodeShot
                     {
                         _end = ToPoint(l);
                         if (!_lastLoggedMove.Equals(_end)) { Dbg("move " + _end); _lastLoggedMove = _end; }
-                        DrawRubber(h, false); // XOR 擦旧画新
+                        UpdateOverlay(h);
                     }
                     return IntPtr.Zero;
                 case WM_LBUTTONUP:
@@ -197,7 +192,6 @@ namespace ZCodeShot
                     if (!_dragging) return IntPtr.Zero;
                     _dragging = false;
                     _end = ToPoint(l);
-                    DrawRubber(h, false); // 擦掉最后一帧
                     ReleaseCapture();
                     _result = Normalize(_start, _end);
                     if (_result.Width < 2 || _result.Height < 2) _result = Rectangle.Empty;
@@ -208,7 +202,6 @@ namespace ZCodeShot
                     return DefWindowProcW(h, m, w, l);
             }
         }
-        static IntPtr DefWindowProc = IntPtr.Zero; // 由 Interop 回填
 
         [DllImport("user32.dll")] static extern IntPtr DefWindowProcW(IntPtr h, uint m, IntPtr w, IntPtr l);
         [DllImport("user32.dll")] static extern bool GetMessageW(out MSG msg, IntPtr hwnd, uint min, uint max);
@@ -228,23 +221,54 @@ namespace ZCodeShot
             return new Rectangle(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
         }
 
-        // XOR 橡皮筋：NOTXOR 模式下同矩形画两次等于擦除；redrawOnly=true 时只补画不清旧帧
-        static void DrawRubber(IntPtr h, bool redrawOnly)
+        // UpdateLayeredWindow 绘制：整个遮罩 = 35% 黑色；当前选区边框 = 不透明亮绿 3px。
+        // 逐像素 alpha 不受窗口级半透明影响，选框颜色所见即所得。
+        struct POINT { public int X, Y; }
+        struct SIZE { public int W, H; }
+        struct BLENDFUNCTION { public byte BlendOp, BlendFlags, SourceConstantAlpha, AlphaFormat; }
+        [DllImport("user32.dll")]
+        static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize,
+            IntPtr hdcSrc, ref POINT pptSrc, uint crKey, ref BLENDFUNCTION bf, uint dwFlags);
+
+        static void UpdateOverlay(IntPtr h)
         {
-            var r = Normalize(_start, _end);
-            IntPtr dc = GetDC(h);
-            if (dc != IntPtr.Zero)
+            if (_layerBuf == null)
             {
-                SetROP2(dc, R2_NOTXORPEN);
-                IntPtr pen = CreatePen(0, 3, 0x0000FF00); // 绿色选框，3px
-                IntPtr old = SelectObject(dc, pen);
-                if (!redrawOnly && !_lastDrawn.IsEmpty) GdiRectangle(dc, _lastDrawn.Left, _lastDrawn.Top, _lastDrawn.Right, _lastDrawn.Bottom);
-                if (!r.IsEmpty && _dragging) GdiRectangle(dc, r.Left, r.Top, r.Right, r.Bottom);
-                SelectObject(dc, old);
-                DeleteObject(pen);
-                ReleaseDC(h, dc);
+                _layerBuf = new Bitmap(_vs.Width, _vs.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                _layerGfx = Graphics.FromImage(_layerBuf);
             }
-            _lastDrawn = (_dragging && !redrawOnly) ? r : _lastDrawn;
+            _layerGfx.Clear(Color.FromArgb(90, 0, 0, 0)); // 35% 黑
+            if (_dragging)
+            {
+                var r = Normalize(_start, _end);
+                if (!r.IsEmpty)
+                {
+                    using (var p = new Pen(Color.FromArgb(255, 0, 255, 70), 3))
+                        _layerGfx.DrawRectangle(p, r);
+                }
+            }
+            IntPtr hdcScreen = GetDC(IntPtr.Zero);
+            if (hdcScreen == IntPtr.Zero) return;
+            IntPtr hbm = IntPtr.Zero, hdcMem = IntPtr.Zero, oldBmp = IntPtr.Zero;
+            try
+            {
+                hdcMem = CreateCompatibleDC(hdcScreen);
+                hbm = _layerBuf.GetHbitmap(Color.FromArgb(0));
+                oldBmp = SelectObject(hdcMem, hbm);
+                var dst = new POINT { X = _vs.X, Y = _vs.Y };
+                var size = new SIZE { W = _vs.Width, H = _vs.Height };
+                var src = new POINT { X = 0, Y = 0 };
+                var bf = new BLENDFUNCTION { BlendOp = 0, SourceConstantAlpha = 255, AlphaFormat = 1 };
+                UpdateLayeredWindow(h, hdcScreen, ref dst, ref size, hdcMem, ref src, 0, ref bf, 2 /*ULW_ALPHA*/);
+            }
+            catch (Exception ex) { Dbg("UpdateOverlay EXCEPTION: " + ex.Message); }
+            finally
+            {
+                if (oldBmp != IntPtr.Zero) SelectObject(hdcMem, oldBmp);
+                if (hbm != IntPtr.Zero) DeleteObject(hbm);
+                if (hdcMem != IntPtr.Zero) DeleteDC(hdcMem);
+                ReleaseDC(IntPtr.Zero, hdcScreen);
+            }
         }
 
         [STAThread]
@@ -260,13 +284,11 @@ namespace ZCodeShot
                 _reload = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\ZCodeShotReload");
                 LoadConfig();
 
-                _overlayBrush = CreateSolidBrush(0x00000000); // 黑
                 var overlayClass = new WNDCLASS
                 {
                     lpfnWndProc = OverlayWndProc,
                     hInstance = GetModuleHandleW(null),
                     lpszClassName = "ZCodeShotOverlay",
-                    hbrBackground = _overlayBrush,
                     hCursor = LoadCursor(IntPtr.Zero, 32515) // IDC_CROSS
                 };
                 RegisterClassW(ref overlayClass);
@@ -321,14 +343,13 @@ namespace ZCodeShot
         static Bitmap RunOverlay()
         {
             _result = Rectangle.Empty;
-            _lastDrawn = Rectangle.Empty;
             _dragging = false;
-            var vs = new Rectangle(GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79));
+            _vs = new Rectangle(GetSystemMetrics(76), GetSystemMetrics(77), GetSystemMetrics(78), GetSystemMetrics(79));
             _overlay = CreateWindowExW(0x80088 /*TOPMOST|TOOLWINDOW|LAYERED*/, "ZCodeShotOverlay", "", 0x80000000 /*WS_POPUP*/,
-                vs.X, vs.Y, vs.Width, vs.Height, IntPtr.Zero, IntPtr.Zero, GetModuleHandleW(null), IntPtr.Zero);
+                _vs.X, _vs.Y, _vs.Width, _vs.Height, IntPtr.Zero, IntPtr.Zero, GetModuleHandleW(null), IntPtr.Zero);
             if (_overlay == IntPtr.Zero) { Dbg("overlay create FAILED"); return null; }
-            SetLayeredWindowAttributes(_overlay, 0, 90, 0x2 /*LWA_ALPHA*/);
             ShowWindow(_overlay, SW_SHOW);
+            UpdateOverlay(_overlay); // 立即呈现遮罩底色
             Dbg("overlay shown");
             MSG msg;
             while (IsWindow(_overlay) && GetMessageW(out msg, IntPtr.Zero, 0, 0))
@@ -337,10 +358,12 @@ namespace ZCodeShot
                 DispatchMessageW(ref msg);
             }
             _overlay = IntPtr.Zero;
+            if (_layerGfx != null) { _layerGfx.Dispose(); _layerGfx = null; }
+            if (_layerBuf != null) { _layerBuf.Dispose(); _layerBuf = null; }
             Dbg("overlay closed, result=" + (_result.IsEmpty ? "empty" : _result.ToString()));
             if (_result.IsEmpty) return null;
             Thread.Sleep(120); // 等桌面合成器完成遮罩消失后的重绘
-            try { return SaveRegion(_result); }
+            try { return SaveRegion(new Rectangle(_vs.X + _result.X, _vs.Y + _result.Y, _result.Width, _result.Height)); }
             catch { return null; }
         }
 
