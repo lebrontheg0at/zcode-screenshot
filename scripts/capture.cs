@@ -243,7 +243,7 @@ namespace ZCodeShot
                 var r = Normalize(_start, _end);
                 if (!r.IsEmpty)
                 {
-                    using (var p = new Pen(Color.FromArgb(255, 0, 255, 70), 3))
+                    using (var p = new Pen(Color.White, 1))
                         _layerGfx.DrawRectangle(p, r);
                 }
             }
