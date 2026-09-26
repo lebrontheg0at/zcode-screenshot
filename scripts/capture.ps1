@@ -108,7 +108,7 @@ if (-not $running) {
   }
   if (-not $handleReady) { Write-Output "监听器启动失败"; exit 1 }
 }
-if ($mode -eq "start") { Write-Output "截图监听器已就绪（Ctrl+Alt+A 框选截图，空闲或 ZCode 退出后自动退出）"; exit 0 }
+if ($mode -eq "start") { Write-Output "截图监听器已就绪（Ctrl+Alt+A 框选截图，ZCode 退出后自动退出）"; exit 0 }
 
 # ---- 截图：触发 -> 等待 latest.txt 更新 ----
 $latest = Join-Path $base "latest.txt"
