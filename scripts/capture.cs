@@ -21,6 +21,7 @@ namespace ZCodeShot
         [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
         [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
         [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+        [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
         [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
         [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
@@ -74,7 +75,7 @@ namespace ZCodeShot
         const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8;
         const uint WM_HOTKEY = 0x0312, WM_TIMER = 0x0113, WM_DESTROY = 0x0002,
             WM_KEYDOWN = 0x0100, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, WM_MOUSEMOVE = 0x0200;
-        const int SW_HIDE = 0, SW_SHOW = 5;
+        const int SW_HIDE = 0, SW_SHOW = 5, SW_RESTORE = 9;
 
         static readonly WndProc MsgWndProc = MsgProc;   // 静态引用防止委托被 GC
         static readonly WndProc OverlayWndProc = OverlayProc;
@@ -394,21 +395,29 @@ namespace ZCodeShot
             return bmp;
         }
 
-        // 截图完成后把图片粘贴回原前台窗口（通常是 ZCode 输入框），用户补充文字后自行发送
+        // 截图完成后把图片粘贴进 ZCode 输入框。ZCode 不在前台（如最小化）时先呼出它。
         static void PasteToPreviousWindow(IntPtr prevHwnd, Bitmap bmp)
         {
             try
             {
-                if (prevHwnd == IntPtr.Zero || bmp == null || !AutoInsert()) return;
-                SetForegroundWindow(prevHwnd);
-                WaitForeground(prevHwnd, 500);
-                // ZCode 客户端：键盘焦点未必在输入框上，先点击输入框区域点亮光标再粘贴。
-                // 这是基于窗口底边布局的启发式，若粘贴位置不对，可关闭 autoInsert。
-                bool isZCode = IsZCodeWindow(prevHwnd);
+                if (bmp == null || !AutoInsert()) return;
+                // 目标窗口：前台是 ZCode 就用它；否则找到 ZCode 主窗口并呼出（还原最小化/切到前台）
+                IntPtr target = prevHwnd;
+                if (!IsZCodeWindow(target))
+                {
+                    IntPtr zcode = FindZCodeWindow();
+                    if (zcode == IntPtr.Zero) { Dbg("paste: no zcode window, skip"); return; }
+                    target = zcode;
+                    if (IsIconic(target)) ShowWindow(target, SW_RESTORE);
+                    else ShowWindow(target, SW_SHOW);
+                    Dbg("paste: summoned zcode window");
+                }
+                SetForegroundWindow(target);
+                WaitForeground(target, 800);
+                // 点击校准过的输入框位置点亮光标（/screenshot 校准 记录），未校准则直接粘贴到当前焦点
+                bool isZCode = IsZCodeWindow(target);
                 RECT r;
-                bool hasRect = GetWindowRect(prevHwnd, out r);
-                // 粘贴位置：优先用 /screenshot 校准 记录的 pasteClickX（窗口宽度比例），
-                // 未校准则不点击，直接粘贴到当前键盘焦点（光标在输入框时即可）。
+                bool hasRect = GetWindowRect(target, out r);
                 double fx = MatchNumber("pasteClickX", -1);
                 double yFromBottom = MatchNumber("pasteClickYFromBottom", 70);
                 Dbg("paste: zcode=" + isZCode + " pasteClickX=" + fx);
@@ -430,6 +439,23 @@ namespace ZCodeShot
                 Dbg("paste: Ctrl+V sent");
             }
             catch (Exception ex) { Dbg("paste EXCEPTION: " + ex.Message); }
+        }
+
+        static IntPtr FindZCodeWindow()
+        {
+            try
+            {
+                foreach (var name in new[] { "zcode", "ZCode" })
+                {
+                    foreach (var p in Process.GetProcessesByName(name))
+                    {
+                        var h = p.MainWindowHandle;
+                        if (h != IntPtr.Zero) return h;
+                    }
+                }
+            }
+            catch { }
+            return IntPtr.Zero;
         }
 
         // 原生剪贴板：写入 CF_DIB（Electron/多数应用读取的格式）。BMP 文件去掉 14 字节文件头即为 DIB。
