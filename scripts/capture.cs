@@ -25,6 +25,7 @@ namespace ZCodeShot
         [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
         [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
         [DllImport("user32.dll")] static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
         [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
         [DllImport("user32.dll")] static extern ushort RegisterClassW(ref WNDCLASS wc);
@@ -427,8 +428,16 @@ namespace ZCodeShot
                     int cx = (int)(r.Left + (r.Right - r.Left) * fx);
                     int cy = r.Bottom - (int)yFromBottom;
                     Dbg("paste: click " + cx + "," + cy);
-                    LeftClick(cx, cy);
-                    Thread.Sleep(150);
+                    // 点击后确认前台仍在 ZCode；用户在这几百毫秒里点了别处就重试一次
+                    for (int attempt = 0; attempt < 2; attempt++)
+                    {
+                        LeftClick(cx, cy);
+                        Thread.Sleep(100);
+                        if (GetForegroundWindow() == target) break;
+                        Dbg("paste: foreground changed after click, retrying");
+                        SetForegroundWindow(target);
+                        WaitForeground(target, 500);
+                    }
                 }
                 SetClipboardBitmap(bmp);
                 keybd_event(0x11, 0, 0, UIntPtr.Zero);      // Ctrl down
@@ -502,12 +511,21 @@ namespace ZCodeShot
             catch { return false; }
         }
 
+        // 模拟点击：与用户真鼠标存在竞争（用户移动会把光标拉回去），因此点击前校验光标到位、
+        // 点击后校验前台窗口未变，失败自动重试
         static void LeftClick(int x, int y)
         {
-            SetCursorPos(x, y);
-            Thread.Sleep(60);
-            mouse_event(2, 0, 0, 0, UIntPtr.Zero); // LEFTDOWN
-            mouse_event(4, 0, 0, 0, UIntPtr.Zero); // LEFTUP
+            var target = new POINT { X = x, Y = y };
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                SetCursorPos(x, y);
+                var now = new POINT();
+                GetCursorPos(out now);
+                if (Math.Abs(now.X - x) > 2 || Math.Abs(now.Y - y) > 2) continue; // 被真鼠标拉走了，重新定位
+                mouse_event(2, 0, 0, 0, UIntPtr.Zero); // LEFTDOWN
+                mouse_event(4, 0, 0, 0, UIntPtr.Zero); // LEFTUP
+                return;
+            }
         }
 
         static bool AutoInsert()
