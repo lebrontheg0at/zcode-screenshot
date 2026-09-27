@@ -420,8 +420,8 @@ namespace ZCodeShot
                 bool isZCode = IsZCodeWindow(target);
                 RECT r;
                 bool hasRect = GetWindowRect(target, out r);
-                double fx = MatchNumber("pasteClickX", -1);
-                double yFromBottom = MatchNumber("pasteClickYFromBottom", 70);
+                double fx = MatchNumber("pasteClickX", 0.5);
+                double yFromBottom = MatchNumber("pasteClickYFromBottom", 165);
                 Dbg("paste: zcode=" + isZCode + " pasteClickX=" + fx);
                 if (isZCode && hasRect && fx >= 0 && fx <= 1)
                 {
