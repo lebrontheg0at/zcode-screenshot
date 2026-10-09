@@ -63,7 +63,7 @@ git clone https://github.com/lebrontheg0at/zcode-screenshot.git "D:\somewhere\zc
    powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/capture.ps1"
    ```
 
-   预期：屏幕出现半透明遮罩，拖出矩形松手即完成截图，图片自动粘贴回 ZCode 输入框。按 ESC 取消属正常行为（输出"截图超时或被取消"）。
+   预期：屏幕出现半透明遮罩，拖出矩形松手即完成截图，图片自动粘贴回 ZCode 输入框。按 ESC 或鼠标右键取消属正常行为（输出"截图超时或被取消"）。
 3. **数据目录生成**：确认 `%USERPROFILE%\.zcode\screenshot\` 下生成了 `config.json`、`shots\`、`latest.txt`。
 4. **热键可用**：按下全局热键（默认 Ctrl+Alt+A）应同样触发框选截图。
 

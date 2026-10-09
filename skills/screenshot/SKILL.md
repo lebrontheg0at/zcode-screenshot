@@ -23,7 +23,7 @@ description: 截图工具操作指南：触发框选截图（路径自动填入 
 powershell -NoProfile -ExecutionPolicy Bypass -File "${CLAUDE_PLUGIN_ROOT}/scripts/capture.ps1"
 ```
 
-框选画面为半透明遮罩，拖出矩形松手即完成，按 ESC 取消（取消时不粘贴）。
+框选画面为半透明遮罩，拖出矩形松手即完成，按 ESC 或鼠标右键取消（取消时不粘贴）。
 
 ## 自定义热键（对话里用户说"把截图快捷键改成 X"时）
 

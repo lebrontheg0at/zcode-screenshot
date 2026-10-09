@@ -75,7 +75,8 @@ namespace ZCodeShot
         const int HotkeyId = 0xB00B;       // 截图（不隐藏窗口）
         const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_SHIFT = 0x4, MOD_WIN = 0x8;
         const uint WM_HOTKEY = 0x0312, WM_TIMER = 0x0113, WM_DESTROY = 0x0002,
-            WM_KEYDOWN = 0x0100, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, WM_MOUSEMOVE = 0x0200;
+            WM_KEYDOWN = 0x0100, WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, WM_MOUSEMOVE = 0x0200,
+            WM_RBUTTONDOWN = 0x0204;
         const int SW_HIDE = 0, SW_SHOW = 5, SW_RESTORE = 9;
 
         static readonly WndProc MsgWndProc = MsgProc;   // 静态引用防止委托被 GC
@@ -189,6 +190,14 @@ namespace ZCodeShot
                         if (!_lastLoggedMove.Equals(_end)) { Dbg("move " + _end); _lastLoggedMove = _end; }
                         UpdateOverlay(h);
                     }
+                    return IntPtr.Zero;
+                case WM_RBUTTONDOWN:
+                    // 右键取消框选，等同 ESC
+                    Dbg("rbtn down -> cancel");
+                    if (_dragging) { _dragging = false; ReleaseCapture(); }
+                    _result = Rectangle.Empty;
+                    ShowWindow(h, SW_HIDE);
+                    DestroyWindow(h);
                     return IntPtr.Zero;
                 case WM_LBUTTONUP:
                     Dbg("lbtn up");

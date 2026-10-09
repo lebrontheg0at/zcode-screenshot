@@ -56,7 +56,7 @@ Then restart ZCode.
 |---|---|
 | `Ctrl + Alt + A` | Capture a screen region, then auto-paste the image into the current foreground window (usually the ZCode input box) |
 
-After triggering: drag a rectangle over the region → release to capture; press `ESC` to cancel. The captured image is pasted into the previously focused window — add your text and press Enter to send.
+After triggering: drag a rectangle over the region → release to capture; press `ESC` or right-click to cancel. The captured image is pasted into the previously focused window — add your text and press Enter to send.
 
 **Slash command in the conversation:**
 
@@ -166,7 +166,7 @@ git clone https://github.com/lebrontheg0at/zcode-screenshot.git "%USERPROFILE%\.
 |---|---|
 | `Ctrl + Alt + A` | 框选截图，完成后图片自动粘贴回当前前台窗口（通常是 ZCode 输入框） |
 
-触发后的操作：拖出矩形 → 松手完成截图；按 `ESC` 取消。截图完成后图片自动粘贴回之前的前台窗口，补充文字、回车即可发送。
+触发后的操作：拖出矩形 → 松手完成截图；按 `ESC` 或鼠标右键取消。截图完成后图片自动粘贴回之前的前台窗口，补充文字、回车即可发送。
 
 **对话内命令：**
 
