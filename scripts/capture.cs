@@ -19,6 +19,9 @@ namespace ZCodeShot
         [DllImport("user32.dll")] static extern bool UnregisterHotKey(IntPtr h, int id);
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+        [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
+        [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+        [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
         [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
         [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
         [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
@@ -419,12 +422,14 @@ namespace ZCodeShot
                     IntPtr zcode = FindZCodeWindow();
                     if (zcode == IntPtr.Zero) { Dbg("paste: no zcode window, skip"); return; }
                     target = zcode;
+                    Dbg("paste: summoning zcode iconic=" + IsIconic(target) + " visible=" + IsWindowVisible(target));
                     if (IsIconic(target)) ShowWindow(target, SW_RESTORE);
                     else ShowWindow(target, SW_SHOW);
-                    Dbg("paste: summoned zcode window");
                 }
-                SetForegroundWindow(target);
-                WaitForeground(target, 800);
+                ForceForeground(target);
+                WaitForeground(target, 1000);
+                if (GetForegroundWindow() != target) ForceForeground(target); // 再抢一次
+                Dbg("paste: foreground ok iconic=" + IsIconic(target) + " visible=" + IsWindowVisible(target));
                 // 点击校准过的输入框位置点亮光标（/screenshot 校准 记录），未校准则直接粘贴到当前焦点
                 bool isZCode = IsZCodeWindow(target);
                 RECT r;
@@ -475,6 +480,24 @@ namespace ZCodeShot
             }
             catch { }
             return IntPtr.Zero;
+        }
+
+        // 可靠抢前台：AttachThreadInput 暂时把前台线程与目标线程连起来，绕过系统前台锁定。
+        // Electron（ZCode）直接 SetForegroundWindow 时常失败，这是桌面应用呼出窗口的标准做法。
+        static void ForceForeground(IntPtr h)
+        {
+            uint pid;
+            uint cur = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+            uint me = GetCurrentThreadId();
+            uint them = GetWindowThreadProcessId(h, out pid);
+            if (cur != me) AttachThreadInput(me, cur, true);
+            AttachThreadInput(me, them, true);
+            if (IsIconic(h)) ShowWindow(h, SW_RESTORE);
+            else ShowWindow(h, SW_SHOW);
+            BringWindowToTop(h);
+            SetForegroundWindow(h);
+            if (cur != me) AttachThreadInput(me, cur, false);
+            AttachThreadInput(me, them, false);
         }
 
         // 原生剪贴板：写入 CF_DIB（Electron/多数应用读取的格式）。BMP 文件去掉 14 字节文件头即为 DIB。
